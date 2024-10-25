@@ -1,29 +1,26 @@
 #define _GNU_SOURCE
+#include <ctype.h>
 #include <getopt.h>
-#include <stdarg.h>
+#include <libgen.h>
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
 #include <string.h>
-#include <ctype.h>
-#include <unistd.h>
-#include <time.h>
-#include <sys/types.h>
 #include <sys/stat.h>
-#include <openssl/conf.h>
-#include <openssl/err.h>
-#include <openssl/crypto.h>
-#include <openssl/evp.h>
+#include <time.h>
+#include <unistd.h>
 
-#if defined(__APPLE__) || defined(__OpenBSD__)
-#include <libgen.h>
-#else
-#include <stdio_ext.h>
-#endif
+#include <openssl/crypto.h>
+#include <openssl/err.h>
+#include <openssl/evp.h>
+#include <openssl/types.h>
+
 #include "include/hcxpsktool.h"
 #include "include/hashcatops.h"
 #include "include/strings.c"
+#include "include/fileops.c"
 /*===========================================================================*/
 /* global var */
 
@@ -33,10 +30,11 @@ static unsigned int thisyear;
 
 static bool airtelflag;
 static bool alticeoptimumflag;
-static bool spectrumflag;
+static bool asusflag;
 static bool digit10flag;
 static bool easyboxflag;
 static bool eeflag;
+static bool eeupperflag;
 static bool egnflag;
 static bool eudateflag;
 static bool hb5flag;
@@ -45,6 +43,8 @@ static bool netgearflag;
 static bool noessidcombinationflag;
 static bool phomeflag;
 static bool podaflag;
+static bool simpleflag;
+static bool spectrumflag;
 static bool tendaflag;
 static bool ukrtelecomflag;
 static bool usdateflag;
@@ -52,9 +52,9 @@ static bool weakpassflag;
 static bool wpskeysflag;
 static bool znidflag;
 
-uint8_t essidglen;
+static uint8_t essidglen;
 /*===========================================================================*/
-static void globalinit()
+static void globalinit(void)
 {
 static time_t t;
 static struct tm *tm;
@@ -76,8 +76,8 @@ static void writepsk(FILE *fhout, const char *pskstring)
 static bool lflag = false;
 static bool uflag = false;
 static int p, l;
-static char lowerpskstring[PSKSTRING_LEN_MAX] = {};
-static char upperpskstring[PSKSTRING_LEN_MAX] = {};
+static char lowerpskstring[PSKSTRING_LEN_MAX] = { 0 };
+static char upperpskstring[PSKSTRING_LEN_MAX] = { 0 };
 
 l = strlen(pskstring);
 if((l < 8) || (l > PSKSTRING_LEN_MAX)) return;
@@ -170,36 +170,36 @@ static void keywritenetgear(FILE *fhout)
 {
 static size_t ca, cs;
 static int cn;
-
-static char pskstring[PSKSTRING_LEN_MAX] = {};
+static char pskstring[PSKSTRING_LEN_MAX] = { 0 };
 
 static const char *firstword[] =
-{ 
-"ancient", "aquatic",
-"basic", "black", "blue", "bold", "brave", "breezy", "bright", "brown",
-"calm", "cheerful", "chummy", "classy", "clever", "cloudy", "cool", "crispy",
-"curly",
+{
+"absurd", "ancient", "aquatic",
+"basic", "big", "black", "blue", "bold", "brave", "breezy", "bright", "brown",
+"calm", "cheerful", "chilly", "chummy", "classy", "clever", "cloudy", "cool",
+"crispy", "curly",
 "daily", "deep", "delightful", "dizzy", "dynamic",
-"eagle", "elated", "elegant", "epic", "excited", "exotic",
-"fancy", "fearless", "festive", "fluffy", "free", "fresh", "friendly", "fuzzy",
+"eagle", "elated", "elegant", "epic", "excited", "exotic", "extra",
+"famous", "fancy", "fearless", "festive", "fluffy", "four", "free", "fresh",
+"friendly", "funny", "fuzzy",
 "gentle", "gifted", "gigantic", "graceful", "grand", "great", "green",
-"happy", "heavy", "helpful", "hungry", "husky",
+"happy", "heavy", "helpful", "hot", "hungry", "husky",
 "icy", "imaginary",
-"jagged", "jolly", "joyous",
+"jagged", "jolly", "joyous", "juicy",
 "kind",
-"large", "little", "lively", "lucky", "lunar",
+"large", "light", "little", "lively", "long", "loud", "lucky", "lunar",
 "magical", "manic", "melodic", "mighty", "misty", "modern",
 "narrow", "new", "nifty", "noisy",
 "odd", "orange",
-"pastel", "perfect", "phobic", "pink", "polite", "precious", "purple",
+"pastel", "perfect", "phobic", "pink", "plain", "polite", "precious", "purple",
 "quaint", "quick", "quiet",
-"rapid", "red", "rocky", "round", "royal", "rustic",
-"savage", "shiny", "silent", "silky", "silly", "slow", "smiley", "smiling",
-"smooth", "strong", "sunny", "sweet",
+"rapid", "red", "rocky", "round", "royal", "ruby", "rustic",
+"savage", "shiny", "simple", "silent", "silky", "silly", "slow", "small",
+"smiley", "smiling", "smooth", "strong", "sunny", "sweet",
 "tablet", "thirsty", "thoughtful", "tiny",
-"uneven", "unusual",
+"ultra", "uneven", "unusual",
 "vanilla", "vast",
-"watery", "wide", "windy", "witty", "wonderful",
+"watery", "white", "wide", "windy", "witty", "wonderful",
 "yellow", "young",
 "zany"
 };
@@ -207,34 +207,34 @@ static const char *firstword[] =
 static const char *secondword[] =
 {
 "airplane", "apple",
-"balloon", "banana", "bay", "berry", "bird", "boat", "bolt", "box",
-"brain", "breeze", "bug", "butter",
-"canary", "canoe", "car", "carrot", "cartoon", "cello", "chair", "cheese",
-"coconut", "comet", "cream", "curtain",
-"daisy", "diamond", "domain",
+"balloon", "banana", "bangle", "bay", "berry", "bike", "bird", "boat",
+"bolt", "boot", "box", "brain", "bread", "breeze", "bug", "butter",
+"canary", "canoe", "car", "carrot", "cartoon", "cat", "cello", "chair",
+"cheese", "coconut", "cold", "comet", "cream", "curtain",
+"daisy", "deer", "diamond", "dog", "domain",
 "earth", "ecasa", "elephant",
-"finch", "fire", "fish", "flamingo", "flower", "flute",
-"gadfly", "giant", "grasshopper",
+"field", "finch", "fire", "fish", "flamingo", "flower", "flute",
+"gate", "gadfly", "giant", "goat", "grasshopper",
 "hat", "hill", "hippo", "house",
 "ink", "iris",
 "jade", "jet", "jetcar", "jungle",
 "kangaroo", "kayak",
-"lake", "lightning", "link", "lotus",
+"lake", "lemon", "lightning", "link", "lion", "lotus",
 "mango", "mesa", "mint", "mobile", "moon", "mountain",
-"nest",
+"nest", "net",
 "oboe", "ocean", "octopus", "onion", "orchestra", "owl",
-"panda", "phoenix", "piano", "pineapple", "planet", "plum", "pond", "poodle",
-"potato", "prairie",
+"panda", "phoenix", "piano", "pineapple", "planet", "plum", "police", "pond",
+"poodle", "potato", "prairie",
 "quail",
-"rabbit", "raccoon", "raven", "river", "road", "rosebud",
+"rabbit", "raccoon", "raven", "rise", "river", "road", "rosebud",
 "sea", "sheep", "ship", "shoe", "shrub", "skates", "sky", "snail",
-"socks", "sparrow", "spider", "stone", "squash",
-"squirrel", "star", "street", "sun",
+"shoe", "socks", "sparrow", "spider", "squash", "squirrel", "star", "stone",
+"street", "sun",
 "table", "tail", "teapot", "time", "tomato", "trail", "train", "tree",
-"trumpet", "tuba", "tulip", "turkey", 
+"truck", "trumpet", "tuba", "tulip", "turkey",
 "umbrella", "unicorn", "unit",
-"valley", "vase", "violet", "violin",
-"water", "wind", "window",
+"valley", "vase", "vinyl", "violet", "violin",
+"water", "way", "wind", "window", "wombat",
 "zoo"
 };
 
@@ -290,104 +290,123 @@ static void keywritespectrum(FILE *fhout)
 {
 static size_t ca, cs;
 static int cn;
-
-static char pskstring[PSKSTRING_LEN_MAX] = {};
+static char pskstring[PSKSTRING_LEN_MAX] = { 0 };
 
 static const char *firstword[] =
 {
-"absurd", "acre", "actual", "adorable", "agency", "ago", "album", "all",
-"alter", "anchor", "ancient", "angry", "apart", "aquatic", "author", "away",
-"bakery", "barrel", "basic", "basket", "bench", "better", "black", "blue",
-"bold", "born", "botany", "brave", "breezy", "brew", "bridge", "brief",
-"bright", "broad", "brown", "calm", "camera", "chance", "check", "chilly",
-"choice", "chorus", "chummy", "classy", "clean", "clerk", "clever", "close",
-"cloudy", "clumsy", "coffee", "cold", "common", "content", "cool", "cosmic",
-"crispy", "curly", "daily", "damp", "decent", "deep", "degree", "desert",
-"direct", "dizzy", "domain", "due", "dusty", "duty", "dynamic", "each",
-"eager", "eagle", "easy", "elated", "elegant", "empty", "energy", "engine",
-"entire", "epic", "errand", "even", "exact", "excited", "exotic", "fair",
-"famous", "fancy", "farmer", "fast", "fearless", "festive", "few", "finish",
-"first", "fit", "fluent", "fluffy", "formal", "free", "fresh", "friend",
-"front", "funny", "furry", "future", "fuzzy", "gallon", "genius", "gentle",
-"giddy", "gifted", "global", "gold", "goofy", "grain", "grand", "great",
-"green", "grumpy", "guitar", "happy", "harbor", "hearty", "heavy", "height",
-"helpful", "high", "hockey", "honest", "honor", "hotel", "hungry", "husky",
-"icy", "idea", "immune", "input", "invent", "island", "jacket", "jagged",
-"jazz", "jeans", "jewel", "jolly", "joyous", "judge", "kettle", "key",
-"kind", "kite", "knight", "known", "ladder", "large", "latter", "lazy",
-"leader", "left", "legal", "less", "light", "like", "little", "lively",
-"long", "lost", "lotus", "loud", "loyal", "lucky", "magical", "major",
-"manic", "many", "marble", "market", "master", "mellow", "melodic", "middle",
-"mighty", "minute", "mirror", "misty", "mobile", "modern", "month", "much",
-"museum", "narrow", "nature", "nearby", "neat", "nest", "new", "nifty",
-"nine", "noble", "noisy", "normal", "north", "oasis", "object", "ocean",
-"odd", "olive", "open", "orange", "oxygen", "palm", "parade", "past",
-"pastel", "patron", "perfect", "phobic", "phone", "pink", "plain", "plane",
-"pledge", "pocket", "polite", "praise", "precious", "prior", "prize", "proper",
-"prose", "proud", "purple", "quaint", "quick", "quiet", "quote", "rain",
-"rainy", "rapid", "rare", "ready", "reason", "red", "remedy", "review",
-"reward", "rich", "rocket", "rocky", "round", "royal", "runner", "rustic",
-"safety", "salt", "salute", "scary", "scout", "select", "shelf", "shiny",
-"short", "silent", "silky", "silly", "silver", "sleepy", "slow", "small",
-"smart", "smiley", "smiling", "smooth", "soccer", "some", "space", "spare",
-"square", "stable", "statue", "stealth", "stock", "street", "strict", "strong",
-"studio", "such", "sudden", "summit", "sunny", "super", "sweet", "swift",
-"tablet", "tall", "teal", "terrific", "theory", "thick", "thirsty", "this",
-"tight", "timber", "tiny", "town", "turtle", "uneven", "union", "unique",
-"unite", "unusual", "upset", "urban", "useful", "usual", "valley", "vanilla",
-"vast", "verse", "violet", "violin", "voyage", "wagon", "walnut", "warm",
-"watch", "watery", "weekly", "west", "wide", "windy", "wine", "witty",
-"wonderful", "wooden", "writer", "yacht", "yard", "year", "yellow", "young",
+"absurd", "acre", "active", "actual", "adorable", "agency", "agent", "ago",
+"album", "alive", "all", "alter", "anchor", "ancient", "angry", "apart",
+"aquatic", "author", "aware", "away", "bakery", "barrel", "basic", "basket",
+"bench", "better", "black", "blue", "bold", "born", "botany", "brave",
+"breezy", "brew", "bridge", "brief", "bright", "broad", "brown", "busy",
+"calm", "camera", "chance", "check", "cheerful", "chilly", "choice", "chorus",
+"chummy", "classy", "clean", "clerk", "clever", "close", "cloudy", "clumsy",
+"coffee", "cold", "common", "content", "cool", "cosmic", "crispy", "curly",
+"daily", "damp", "dear", "decent", "deep", "degree", "desert", "dig",
+"direct", "dizzy", "dnamic", "domain", "double", "due", "dusty", "duty",
+"dynamic", "each", "eager", "eagle", "east", "easy", "eggplant", "either",
+"elated", "elegant", "empty", "energy", "engine", "enough", "entire", "epic",
+"epicn", "errand", "even", "evenp", "every", "exact", "excited", "exotic",
+"expert", "extra", "fair", "famous", "fancy", "farmer", "fast", "fearless",
+"festive", "few", "finish", "first", "fit", "fluent", "fluffy", "formal",
+"former", "free", "freep", "fresh", "friend", "friendly", "front", "frosty",
+"full", "funny", "furry", "future", "fuzzy", "gallon", "genius", "gentle",
+"giddy", "gifted", "glad", "global", "gold", "good", "goofy", "grain",
+"grand", "grateful", "great", "green", "grumpy", "guitar", "happy", "harbor",
+"hearty", "heavy", "height", "helpful", "high", "hockey", "home", "honest",
+"honor", "hot", "hotel", "hour", "hungry", "husky", "icy", "idea",
+"ideal", "imaginary", "immune", "input", "internal", "invent", "islan", "island",
+"jacket", "jagged", "jazz", "jeans", "jewel", "jolly", "joyous", "judge",
+"juicy", "just", "kettle", "key", "kind", "king", "kite", "knight",
+"known", "ladder", "ladderspace", "large", "last", "latter", "lazy", "leader",
+"least", "left", "legal", "less", "light", "like", "little", "lively",
+"living", "long", "lost", "lotus", "loud", "love", "loyal", "lucky",
+"magical", "major", "manic", "many", "marble", "market", "master", "medium",
+"mellow", "melodic", "middle", "mighty", "minute", "mirror", "misty", "mobile",
+"modern", "month", "most", "much", "museum", "narrow", "nature", "nearby",
+"neat", "nest", "new", "newj", "next", "nice", "nifty", "night",
+"nine", "noble", "noisy", "normal", "north", "novel", "oasis", "object",
+"ocean", "odd", "olive", "one", "only", "open", "orange", "other",
+"outlet", "oxygen", "palm", "palmw", "parade", "party", "past", "pastel",
+"patron", "perfect", "phobic", "phone", "pink", "plain", "plane", "pledge",
+"plenty", "plus", "pocket", "polite", "pony", "pool", "praise", "precious",
+"prior", "prize", "proof", "proper", "prose", "proud", "purple", "quaint",
+"quick", "quiet", "quote", "rain", "rainy", "rapid", "rare", "ready",
+"real", "reason", "recent", "red", "remedy", "remote", "review", "reward",
+"rich", "rocket", "rocky", "root", "rough", "round", "royal", "runner",
+"rusti", "rustic", "safe", "safety", "salt", "salute", "scary", "scout",
+"select", "senior", "shadow", "shelf", "shiny", "short", "silent", "silky",
+"silly", "silver", "simple", "sleepy", "slight", "slow", "small", "smart",
+"smiley", "smiling", "smooth", "soccer", "solid", "some", "south", "space",
+"spare", "square", "stable", "statue", "stealth", "still", "stock", "street",
+"strict", "strong", "studio", "such", "sudden", "summit", "sunny", "super",
+"sure", "sweet", "swift", "tablet", "tall", "teal", "terrific", "that",
+"theory", "thick", "think", "thirsty", "this", "tight", "timber", "tiny",
+"top", "total", "tough", "town", "train", "turtle", "uneven", "union",
+"unique", "unite", "unusual", "upset", "urban", "useful", "usual", "valley",
+"vanilla", "vast", "verse", "violet", "violin", "voyage", "wagon", "walnut",
+"warm", "watch", "watery", "weekly", "west", "whale", "what", "wide",
+"wild", "windy", "wine", "winter", "wise", "witty", "wonderful", "wooden",
+"worth", "writer", "yacht", "yard", "year", "yellow", "young", "youngs",
 "zany", "zeal", "zebra", "zone"
 };
 
 static const char *secondword[] =
 {
-"acre", "actor", "ad", "advice", "agency", "air", "airplane", "album",
-"anchor", "apple", "area", "aspect", "author", "ave", "bakery", "ball",
-"balloon", "banana", "barrel", "basket", "beach", "bead", "bear", "bench",
-"berry", "bike", "bird", "board", "boat", "bolt", "bonus", "book",
-"boot", "botany", "box", "brain", "bread", "breeze", "bridge", "bubble",
-"bug", "bunny", "bus", "butter", "camera", "canoe", "car", "carrot",
-"cartoon", "cello", "chair", "check", "cheek", "cheese", "chorus", "city",
-"clerk", "clock", "coat", "coconut", "coffee", "comet", "cookie", "cosmic",
-"country", "county", "cow", "cream", "crown", "curtain", "daisy", "data",
-"dealer", "deer", "degree", "desert", "desk", "diamond", "dinner", "dirt",
-"dog", "doll", "domain", "drama", "duty", "eagle", "ear", "earth",
-"editor", "effort", "energy", "engine", "epic", "errand", "error", "estate",
-"extent", "famous", "farmer", "field", "finch", "finish", "fire", "fish",
-"flower", "fluent", "flute", "form", "formal", "fox", "friend", "gadfly",
-"gallon", "garden", "gate", "genius", "giant", "global", "grain", "guitar",
+"", "acre", "actor", "ad", "advice", "affect", "agency", "air",
+"airplane", "album", "anchor", "apple", "area", "art", "aspect", "ature",
+"author", "ave", "bakery", "ball", "balloon", "banana", "barrel", "basis",
+"basket", "beach", "bead", "bear", "beer", "bench", "berry", "bike",
+"bird", "board", "boat", "bolt", "bonus", "book", "boot", "botany",
+"box", "brain", "bread", "breeze", "bridge", "bubble", "bug", "bunny",
+"bus", "butter", "butterfly", "cafe", "camera", "canoe", "car", "card",
+"carrot", "cartoon", "cat", "cello", "chair", "check", "cheek", "cheese",
+"chill", "chorus", "city", "clerk", "client", "clock", "coat", "coconut",
+"coffee", "comet", "cookie", "cosmic", "country", "county", "course", "cow",
+"cream", "crown", "currency", "curtain", "daisy", "data", "day", "dealer",
+"deeper", "deer", "degree", "desert", "desk", "diamond", "dinner", "dirt",
+"disk", "dog", "doll", "domain", "drama", "drawer", "dremedy", "driver",
+"duty", "eagle", "ear", "earth", "editor", "effort", "energy", "engine",
+"epic", "errand", "error", "est", "estate", "event", "extent", "fact",
+"famous", "farmer", "field", "fig", "film", "finch", "finish", "fire",
+"fish", "flo", "flower", "fluent", "flute", "form", "formal", "fox",
+"friend", "gadfly", "gallon", "garden", "gate", "gene", "genius", "giant",
+"girl", "global", "goal", "grain", "green", "guest", "guide", "guitar",
 "guppy", "hair", "hall", "hand", "harbor", "hat", "height", "hill",
-"hippo", "hockey", "home", "honor", "horse", "hotel", "house", "idea",
-"idol", "immune", "income", "ink", "input", "invent", "iris", "island",
-"jacket", "jade", "jazz", "jeans", "jet", "jewel", "judge", "jungle",
-"kayak", "kettle", "key", "kite", "knight", "ladder", "lake", "law",
-"lawn", "leader", "lemon", "length", "light", "lion", "lotus", "loyal",
-"major", "mango", "marble", "market", "math", "menu", "mesa", "method",
-"mint", "mirror", "mobile", "month", "moon", "mud", "museum", "music",
-"nation", "nature", "nest", "noble", "north", "oasis", "object", "oboe",
-"ocean", "octopus", "onion", "orange", "outlet", "owl", "owner", "oxygen",
-"palm", "panda", "pant", "paper", "parade", "park", "patron", "peach",
-"pear", "pencil", "people", "phoenix", "phone", "piano", "pizza", "place",
-"planet", "player", "pledge", "plum", "pocket", "poem", "poet", "poetry",
-"pond", "poodle", "potato", "prairie", "praise", "prose", "puppy", "quail",
-"quaint", "quick", "quote", "rabbit", "raccoon", "raft", "rain", "raven",
-"reason", "remedy", "review", "reward", "river", "road", "robin", "rock",
-"rocket", "role", "rose", "rosebud", "runner", "safety", "salute", "scout",
-"sea", "seed", "series", "shark", "sheep", "shelf", "ship", "shoe",
-"shrub", "singer", "skates", "sky", "sled", "snail", "snake", "soccer",
-"socks", "sofa", "space", "spark", "sparrow", "spider", "spoon", "squash",
-"squirrel", "stable", "star", "state", "statue", "storm", "stove", "straw",
-"street", "studio", "study", "summit", "sun", "table", "tablet", "tea",
-"teapot", "teen", "tent", "theory", "tiger", "timber", "tomato", "tooth",
-"topic", "town", "trail", "train", "tree", "truck", "trumpet", "truth",
-"tuba", "tulip", "turkey", "turtle", "two", "unicorn", "union", "unit",
-"unite", "urban", "useful", "valley", "value", "vase", "verse", "video",
-"violet", "violin", "volume", "voyage", "wagon", "walnut", "watch", "water",
-"wealth", "week", "west", "whale", "wind", "window", "windy", "wolf",
-"world", "writer", "yacht", "yard", "year", "youth", "zeal", "zebra",
-"zone", "zoo"
+"hippo", "hockey", "home", "hone", "honor", "horse", "hotel", "house",
+"idea", "idol", "immune", "income", "ink", "input", "invent", "iris",
+"island", "jacket", "jade", "jazz", "jeans", "jet", "jewel", "judge",
+"jungle", "kayak", "kettle", "key", "king", "kite", "knight", "ladder",
+"lake", "law", "lawn", "leader", "lemon", "length", "life", "light",
+"lion", "list", "lotus", "loyal", "major", "mall", "mango", "map",
+"marble", "market", "math", "meal", "media", "memory", "menu", "mesa",
+"method", "mint", "mirror", "mobile", "moment", "month", "moon", "movie",
+"mud", "museum", "music", "nail", "nation", "nature", "nest", "news",
+"night", "noble", "north", "number", "oasis", "object", "oboe", "ocean",
+"octopus", "office", "onion", "orange", "outlet", "owl", "own", "owner",
+"oxygen", "palm", "panda", "pant", "paper", "parade", "park", "parm",
+"patron", "peach", "pear", "pencil", "people", "phoenix", "phone", "piano",
+"pizza", "place", "planet", "player", "pledge", "plum", "pocket", "poem",
+"poet", "poetry", "policy", "pond", "poodle", "potato", "prairie", "praise",
+"prose", "puppy", "quail", "quaint", "quick", "quote", "rabbit", "raccoon",
+"radio", "raft", "rain", "rairie", "ratio", "raven", "reason", "region",
+"remedy", "review", "reward", "river", "road", "robin", "rock", "rocket",
+"role", "rose", "rosebud", "runner", "safety", "salad", "salute", "sample",
+"scout", "sea", "sector", "seed", "series", "shark", "sheep", "shelf",
+"ship", "shoe", "shrub", "side", "singer", "skates", "sky", "sled",
+"snail", "snake", "snall", "soccer", "socks", "sofa", "soks", "song",
+"soup", "space", "spark", "sparrow", "speech", "spider", "spoon", "squash",
+"squirrel", "squirrelp", "stable", "star", "state", "statue", "steak", "storm",
+"story", "stove", "straw", "street", "studio", "study", "summit", "sun",
+"table", "tablet", "tea", "teapot", "teapoty", "teen", "tennis", "tent",
+"thanks", "theory", "tiger", "timber", "time", "tomato", "tooth", "topic",
+"town", "trail", "train", "tree", "truck", "trumpet", "truth", "tuba",
+"tulip", "turkey", "turtle", "two", "type", "ungle", "unicorn", "union",
+"unit", "unite", "urban", "useful", "valley", "value", "vase", "verse",
+"video", "violet", "violin", "volume", "voyage", "wagon", "walnut", "watch",
+"wate", "water", "way", "wealth", "week", "west", "whale", "while",
+"wind", "window", "windy", "winner", "wolf", "work", "world", "writer",
+"yacht", "yard", "year", "youth", "zeal", "zebra", "zone", "zoo"
 };
 
 for(ca = 0; ca < (sizeof(firstword) / sizeof(char *)); ca++)
@@ -443,32 +462,36 @@ static void keywritephome(FILE *fhout)
 static size_t ca, cs;
 static int cn;
 
-static char pskstring[PSKSTRING_LEN_MAX] = {};
+static char pskstring[PSKSTRING_LEN_MAX] = { 0 };
 
 static const char *five[] =
 {
-"about", "again", "aisle", "alley", "amaze", "angle", "apron", "attic", "award",
-"bacon", "badge", "bagel", "beard", "begin", "being", "berry", "bloom", "board", "bread", "brick", "bring",
-"brush", "brook", "build", "built",
-"cause", "chair", "charm", "chart", "charm", "chase", "check", "chime", "chord", "chore", "chose", "cough",
-"class", "clear", "coast", "cough", "cover", "court", "creak", "curve",
-"daily", "daisy", "dance", "diner", "dodge", "dough", "dozed", "drain", "drink",
-"eager", "eagle", "earth", "eight", "elect", "empty", "enter", "equal", "event", "exact",
+"about", "again", "agree", "ahead", "aisle", "alert", "alley", "allow", "amaze", "angle", "apple", "apron", "arrow",
+"attic", "award",
+"bacon", "badge", "bagel", "baked", "basic", "beard", "begin", "being", "below", "berry", "bison", "block", "bloom", "board",
+"boast", "bonus", "booth", "bored", "brace", "bread", "brick", "bring", "brush", "brook", "build", "built",
+"cabin", "cause", "chair", "camel", "canal", "chair", "charm", "chart", "charm", "chase", "check", "cheer", "chime",
+"chord", "chore", "chose", "chunk", "cough", "class", "clear", "coast", "cocoa", "cough", "cover", "count", "court",
+"creak", "cream", "creek", "crumb", "curve",
+"daily", "dairy", "daisy", "dance", "delay", "diner", "dodge", "dough", "dozed", "drain", "dried", "drink",
+"eager", "eagle", "earth", "eight", "elbow", "elect", "empty", "enter", "entry", "equal", "event", "exact",
 "fancy", "favor", "feast", "fence", "fever", "field", "fifty"
 };
 
 static const char *six[] =
 {
-"across", "action", "always", "amount", "animal", "answer", "anyone", "appear", "arctic", "autumn",
-"basket", "become", "beside", "better", "bottle", "breezy", "bridge", "bright", "button",
-"cactus", "called", "carpet", "camera", "candid", "canvas", "canyon", "castle", "cattle", "caught", "celery", "cellar",
-"chance", "change", "charge", "cheery", "chores", "chosen", "circle", "cities", "collar", "column", "comedy", "copied",
-"county", "create",
-"degree", "depend", "design", "detail", "dimmed", "dinner", "direct",
-"effect", "eighty", "eleven", "engine",
-"factor", "famous", "filter", "finish", "flight", "flower", "follow", "forest",
-"garden", "gather",
-"harbor", "hardly", "health"
+"across", "action", "advice", "almost", "always", "amount", "anchor", "animal", "answer", "anyone", "anyway", "appear",
+"arctic", "around", "arrive", "artist", "autumn", "awhile",
+"baking", "banana", "basket", "become", "beside", "better", "borrow", "bottle", "breezy", "bridge", "bright", "bucket",
+"buckle", "button",
+"cactus", "called", "career", "carpet", "camera", "candid", "canvas", "canyon", "castle", "cattle", "caught", "celery",
+"cellar", "center", "chance", "change", "charge", "cheery", "chores", "chosen", "circle", "cities", "clever", "collar",
+"column", "comedy", "common", "copied", "corral", "county", "course", "create", "crumbs", "crunch",
+"degree", "depend", "design", "detail", "diesel", "dimmed", "dinner", "direct",
+"easier", "effect", "eighty", "eleven", "energy", "engine", "entire", "escape",
+"factor", "famous", "fasten", "faucet", "filter", "finish", "flight", "flower", "folded", "follow", "forest",
+"garden", "gather", "guitar",
+"happen", "harbor", "hardly", "health"
 };
 
 for(ca = 0; ca < (sizeof(five) / sizeof(char *)); ca++)
@@ -479,16 +502,7 @@ for(ca = 0; ca < (sizeof(five) / sizeof(char *)); ca++)
 			{
 			snprintf(pskstring, PSKSTRING_LEN_MAX, "%s%04d%s", five[ca], cn, six[cs]);
 			fprintf(fhout,"%s\n", pskstring);
-			}
-		}
-	}
-for(ca = 0; ca < (sizeof(six) / sizeof(char *)); ca++)
-	{
-	for(cs = 0; cs < (sizeof(five) / sizeof(char *)); cs++)
-		{
-		for (cn = 0; cn < 10000; cn++)
-			{
-			snprintf(pskstring, PSKSTRING_LEN_MAX, "%s%04d%s", six[ca], cn, five[cs]);
+			snprintf(pskstring, PSKSTRING_LEN_MAX, "%s%04d%s", six[cs], cn, five[ca]);
 			fprintf(fhout,"%s\n", pskstring);
 			}
 		}
@@ -496,184 +510,193 @@ for(ca = 0; ca < (sizeof(six) / sizeof(char *)); ca++)
 return;
 }
 /*===========================================================================*/
-static void keywritetenda1(FILE *fhout)
+static void keywritetenda(FILE *fhout)
 {
 static size_t ca, cs;
 static int cn;
 
-static char pskstring[PSKSTRING_LEN_MAX] = {};
+static char pskstring[PSKSTRING_LEN_MAX] = { 0 };
 
-static const char *word1[] = { "card", "cash",
-	"feed",
-	"jade",
-	"name" };
+static const char *word[] =
+{
+"able", "about", "above", "actor", "after", "again", "alone", "also", "apple",
+"baby", "back", "bath", "bean", "best", "bike", "bird", "blue", "body", "book",
+"cafe", "cake", "calm", "card", "carry", "cash", "chair", "child", "cold", "come", "cool", "cute",
+"daily", "dance", "dark", "dash", "dear", "desk", "done", "door", "down", "duck", "duty",
+"each", "early", "earth", "east", "easy", "edit", "envy", "even", "every", "exist", "exit",
+"face", "fact", "fall", "fast", "feed", "feel", "fill", "fish", "five", "four",
+"game", "ghost", "girl", "giude", "give", "good", "green", "group", "guest",
+"hair", "hand", "happy", "hard", "have", "haven", "head", "high", "hike", "horse", "house",
+"into",
+"jade", "jazz", "jean", "jeep", "join", "joke", "juice", "july", "june",
+"keep", "kind",
+"lable", "labor", "lack", "lake", "land", "light", "like", "live", "lock", "loop", "lose",
+"mail", "main", "major", "make", "math", "meet", "milk", "moon", "more", "most", "mouth", "much",
+"name", "near", "need", "nine", "none", "north", "nose", "note",
+"occur", "ocean", "once", "open", "over",
+"pace", "pain", "park", "part", "pass", "past", "path", "photo", "piece", "pink",
+"queen", "quest", "quick", "quit", "quite",
+"rainy", "reach", "read", "rice", "ride", "road", "room", "rope", "rose", "rule", "rush",
+"safe", "said", "sale", "salt", "same", "sick", "soul", "soup", "south", "sunny",
+"table", "take", "tale", "talk", "tall", "team", "tell", "test", "think", "ture",
+"under", "unit", "upper",
+"walk", "waste", "water", "weak", "week", "west", "what", "where", "wind", "word"
+};
 
-static const char *word2[] = { "dash",
-	"more",
-	"ride",
-	"think",
-	"wind" };
-
-for(ca = 0; ca < (sizeof(word1) / sizeof(char *)); ca++)
+for(ca = 0; ca < (sizeof(word) / sizeof(char *)); ca++)
 	{
-	for(cs = 0; cs < (sizeof(word2) / sizeof(char *)); cs++)
+	for(cs = 0; cs < (sizeof(word) / sizeof(char *)); cs++)
 		{
+		if (ca == cs) continue;
 		for (cn = 0; cn < 1000; cn++)
 			{
-			snprintf(pskstring, PSKSTRING_LEN_MAX, "%s%s%03d", word1[ca], word2[cs], cn);
+			snprintf(pskstring, PSKSTRING_LEN_MAX, "%s%s%03d", word[ca], word[cs], cn);
 			fprintf(fhout,"%s\n", pskstring);
 			}
 		}
-	}
-return;
-}
-/*===========================================================================*/
-static void keywritetenda2(FILE *fhout)
-{
-static size_t ca;
-static int cn;
-
-static char pskstring[PSKSTRING_LEN_MAX] = {};
-
-static const char *word1[] = { "apple",
-	"east",
-	"give",
-	"lable", "light",
-	"north",
-	"pace",
-	"south",
-	"west" };
-
-for(ca = 0; ca < (sizeof(word1) / sizeof(char *)); ca++)
-	{
 	for (cn = 0; cn < 10000; cn++)
 		{
-		snprintf(pskstring, PSKSTRING_LEN_MAX, "%s%04d", word1[ca], cn);
+		snprintf(pskstring, PSKSTRING_LEN_MAX, "%s%04d", word[ca], cn);
 		fprintf(fhout,"%s\n", pskstring);
 		}
 	}
 return;
 }
 /*===========================================================================*/
-static void keywriteee(FILE *fhout)
+static void keywriteee(FILE *fhout, bool upper)
 {
 static size_t w3, w4, w5;
 
-static char pskstring[16] = {};
+static char pskstring[16] = { 0 };
 
 const char *pskmask = "%s-%s-%s\n";
 
-char** uword3;
-char** uword4;
-char** uword5;
+char** uword3 = NULL;
+char** uword4 = NULL;
+char** uword5 = NULL;
 
 static const char *word3[] =
 {
-    "abs", "ace", "act", "add", "ado", "age", "ago", "aid", "ail", "aim", "all", "amp",
-    "any", "ape", "apt", "art", "ask",
-    "bad", "bay", "beg", "bet", "bid", "big", "bow", "box", "bud", "bun", "bus", "buy",
-    "cad", "cam", "can", "cog", "cop", "cud", "cup", "cut",
-    "dam", "did", "die", "dig", "dim", "dip", "dog", "dry", "dub", "due", "dug",
-    "ear", "ego", "elk", "end", "era", "eye",
-    "fab", "fan", "far", "fat", "fax", "fee", "few", "fit", "fix", "fly", "fog", "fox",
-    "fry",
-    "gap", "gel", "gem", "get", "god",
-    "hem", "hid", "hip", "hit", "hop", "hot", "how", "hub",
-    "icy", "ink", "inn",
-    "jar", "job", "jog", "jot",
-    "key",
-    "lay", "led", "leg", "let", "lid", "lie", "lip", "lit", "lob", "lot", "low",
-    "mad", "map", "max", "mid", "mix", "mob", "mop", "mow", "mud", "mug",
-    "nag", "nap", "net", "new", "nod", "nor", "not", "now",
-    "oar", "oat", "odd", "off", "oil", "old", "one", "opt", "our", "out", "owe", "own",
-    "pal", "pay", "pea", "pen", "per", "pet", "pie", "pin", "ply", "pop", "pub", "put",
-    "ran", "rat", "raw", "red", "rid", "rig", "rob", "rot", "run",
-    "sad", "set", "sew", "shy", "sim", "sin", "sip", "sir", "sit", "six", "sow", "spy",
-    "tad", "tag", "tap", "tax", "ten", "tic", "tip", "ton", "top", "tow", "toy", "try",
-    "two",
-    "use",
-    "vex", "vow",
-    "wet", "win", "won"
+"abs", "ace", "act", "add", "ado", "age", "ago", "aid", "ail", "aim", "all", "amp",
+"any", "ape", "apt", "art", "ask",
+"bad", "bay", "bee", "beg", "bet", "bid", "big", "bow", "box", "bud", "bug", "bun",
+"bus", "buy",
+"cad", "cam", "can", "cob", "cog", "cop", "cud", "cup", "cut",
+"dam", "did", "die", "dig", "dim", "dip", "dog", "dry", "dub", "due", "dug",
+"ear", "ego", "elk", "end", "era", "eye",
+"fab", "fan", "far", "fat", "fax", "fee", "few", "fin", "fit", "fix", "fly", "fog",
+"fox", "fry",
+"gap", "gel", "gem", "get", "god",
+"hem", "hid", "hip", "hit", "hop", "hot", "how", "hub",
+"ice", "icy", "ink", "inn",
+"jar", "jet", "job", "jog", "jot",
+"key",
+"lag", "lap", "law", "lay", "led", "leg", "let", "lid", "lie", "lip", "lit", "lob",
+"lop", "lot", "low",
+"mad", "map", "max", "mid", "mix", "mob", "mop", "mow", "mud", "mug",
+"nag", "nap", "net", "new", "nod", "nor", "not", "now",
+"oar", "oat", "odd", "off", "oil", "old", "one", "opt", "our", "out", "owe", "own",
+"pad", "pal", "pay", "pea", "peg", "pen", "per", "pet", "pie", "pin", "ply", "pop",
+"pro", "pub", "put",
+"ran", "rat", "raw", "red", "rid", "rig", "rob", "rot", "rug", "run",
+"sad", "sea", "set", "sew", "shy", "sim", "sin", "sip", "sir", "sit", "six", "sow",
+"soy", "spy",
+"tad", "tag", "tap", "tax", "ten", "tic", "tip", "ton", "top", "tow", "toy", "try",
+"two",
+"use",
+"van", "vex", "vow",
+"wet", "win", "won"
 };
 
 static const char *word4[] =
 {
-    "able", "acre", "aqua",
-    "bait", "bake", "bald", "ball", "bark", "base", "bath", "bats", "bead", "bell", "best", "boat",
-    "boil", "bold", "bore", "both", "busy",
-    "calm", "camp", "cape", "card", "case", "cash", "cent", "chef", "city", "clad", "clay", "club",
-    "clue", "coat", "cool", "cope", "copy", "cute",
-    "dame", "damp", "dare", "dash", "date", "days", "deaf", "deal", "desk", "dive", "door", "dove",
-    "down", "draw", "drop",
-    "each", "east", "edge", "edit", "epic", "even", "ever", "exit",
-    "face", "fair", "fake", "fall", "fast", "fine", "firm", "flag", "flee", "foam", "fold", "foot",
-    "four", "full", "fuse",
-    "gaps", "gate", "gave", "gift", "gown", "gray",
-    "half", "hang", "hard", "hats", "head", "heat", "hide", "high", "hint", "hire", "hold", "hook",
-    "huge", "hurt", "hymn",
-    "idea", "iron",
-    "jets", "joke", "judo",
-    "keen", "kiss",
-    "lace", "lack", "land", "late", "lawn", "lazy", "less", "link", "live", "loaf", "loan", "logo",
-    "lord", "loss", "loud",
-    "menu", "mill", "mine", "mint", "mist", "most", "move", "much",
-    "name", "neat", "need", "nest", "noon", "nude",
-    "oars", "oust",
-    "pads", "page", "paid", "pain", "pale", "pane", "pars", "part", "pass", "past", "pear", "pegs",
-    "pens", "pier", "pine", "pins", "pint", "pity", "plan", "poem", "poet", "pond", "pool", "poor",
-    "post", "pure",
-    "rare", "real", "rest", "rich", "riot", "ripe", "road", "roam", "room", "root", "rude",
-    "safe", "sail", "sale", "same", "sand", "save", "scan", "seal", "seat", "seem", "send", "sent",
-    "shin", "shop", "sick", "side", "sift", "sign", "silk", "sing", "skip", "slim", "slip", "slum",
-    "soap", "solo", "sore", "sour", "spit", "stew", "sure",
-    "tall", "teak", "team", "tear", "tent", "then", "tide", "time", "tone", "tour", "trim", "trod",
-    "true", "tune", "turn",
-    "used",
-    "vain", "vast", "vend", "vote",
-    "wait", "want", "warn", "wave", "west", "wild", "wind", "wing", "wise", "worm"
+"able", "acre", "aqua", "arch", "area",
+"bait", "bake", "bald", "ball", "bark", "base", "bath", "bats", "bead", "beat", "bell", "best",
+"boat", "boil", "bold", "bore", "both", "busy",
+"calm", "camp", "cape", "card", "case", "cash", "cent", "chef", "city", "clad", "clay", "club",
+"clue", "coat", "cook", "cool", "cope", "copy", "cute",
+"dame", "damp", "dare", "dash", "date", "days", "deaf", "deal", "desk", "dial", "dish", "dive",
+"door", "duty", "dove", "down", "draw", "drop",
+"each", "east", "edge", "edit", "epic", "even", "ever", "exit",
+"face", "fair", "fake", "fast", "fall", "fame", "fast", "fine", "firm", "flag", "flee", "foam",
+"fold", "foot", "four", "full", "fund", "fuse",
+"gaps", "gate", "gave", "gear", "gift", "glad", "gown", "gray",
+"half", "hang", "hard", "hats", "head", "heat", "hide", "high", "hill", "hint", "hire", "hold",
+"hook", "huge", "hurt", "hymn",
+"idea", "iron",
+"jets", "joke", "judo",
+"keen", "kiss",
+"lace", "lack", "land", "late", "lawn", "lazy", "less", "link", "live", "loaf", "loan", "logo",
+"look", "lord", "loss", "loud",
+"melt", "menu", "mere", "mill", "mine", "mint", "mist", "mode", "moon", "most", "move", "much",
+"name", "neat", "need", "nest", "noon", "nude",
+"oars", "oust",
+"pace", "pads", "page", "paid", "pain", "pale", "pane", "park", "pars", "part", "pass", "past",
+"pear", "pegs", "pens", "pier", "pine", "pins", "pint", "pity", "plan", "poem", "poet", "pond",
+"pool", "poor", "post", "pure",
+"rack", "rare", "real", "rest", "rich", "riot", "ripe", "road", "roam", "room", "root", "rude",
+"rule",
+"safe", "sail", "sale", "same", "sand", "save", "scan", "seal", "seat", "seem", "send", "sent",
+"shin", "shop", "shut", "sick", "side", "sift", "sign", "silk", "sing", "skip", "slim", "slip",
+"slum", "soap", "soil", "sold", "solo", "sore", "sour", "spit", "step", "stew", "sure",
+"tall", "teak", "team", "tear", "tent", "then", "tide", "time", "tone", "tour", "town", "trim",
+"trod", "true", "tube", "tune", "turn",
+"used",
+"vain", "vast", "vend", "vote",
+"wait", "walk", "want", "ward", "warn", "wave", "west", "wild", "wind", "wing", "wire", "wise",
+"worm",
+"zone"
 };
 
 static const char *word5[] =
 {
-    "aback", "acres", "adapt", "agent", "agony", "ahead", "alarm", "alert", "alien", "allot", "amble", "angle",
-    "ankle", "armed", "arrow", "audio",
-    "beams", "bland", "blank", "boast", "boost", "bored", "bread", "broke",
-    "cable", "cakes", "cards", "cargo", "cause", "chair", "cheap", "chips", "choke", "climb", "clove", "coact",
-    "coins", "comic", "count", "cover", "crane", "crash", "crude", "cruel", "cubic", "curry",
-    "dance", "dense", "desks", "diner", "dines", "dozen", "draft", "dream", "drink", "drown", "drunk", "dusty",
-    "early", "elder", "enter", "equal", "equip", "erode", "evens", "event", "exact", "excel", "extra",
-    "fancy", "fares", "fence", "fibre", "fifty", "filed", "files", "final", "floor", "flour", "flute", "focus",
-    "foggy", "front", "fruit",
-    "genie", "giant", "glare", "gleam", "glows", "grave", "great", "grids", "group", "grove", "guess", "guest",
-    "harps", "hawks", "heavy", "house", "humor",
-    "ideal", "index", "inked", "ivory",
-    "judge",
-    "knock",
-    "laces", "large", "learn", "light", "lilac", "linen", "loose", "lucky", "lunar", "lyric",
-    "madam", "major", "malts", "manor", "maple", "marry", "merit", "moist", "molar", "motto", "mourn", "mouse",
-    "muddy",
-    "nacho", "novel",
-    "optic",
-    "pages", "panda", "pause", "pedal", "pesto", "piece", "piety", "pings", "pious", "pivot", "place", "plant",
-    "pound", "prime", "prize", "probe", "prose", "prune", "puppy", "pylon",
-    "quiet",
-    "rally", "refer", "remit", "renew", "repel", "roach", "rocky", "roofs", "rooks", "rough", "royal", "rusty",
-    "salad", "scarf", "scoop", "scoot", "scope", "score", "scorn", "shaft", "sharp", "sheds", "shine", "shiny",
-    "shirt", "shore", "shrub", "silly", "sixty", "skate", "socks", "sound", "spade", "spare", "spend", "spent",
-    "squad", "stack", "stand", "stars", "start", "stats", "steam", "stick", "stoop", "storm", "story", "sunny",
-    "sweat", "swift", "swing", "sword",
-    "tally", "tempt", "tents", "these", "thick", "thief", "tidal", "tiger", "title", "today", "track", "train",
-    "trick", "trust", "tuned", "twigs", "twist",
-    "unbid", "unbox", "uncap", "upend", "upper", "upset",
-    "valid", "vends", "vines", "visit",
-    "weary", "wheel", "whole", "worth", "wound", "wrist",
-    "yeast",
-    "zooms"
+"aback", "acres", "adapt", "agent", "agony", "ahead", "alarm", "alert", "align", "alien", "allot", "amble",
+"angle", "ankle", "arena", "armed", "arrow", "audio", "award",
+"beams", "bland", "blank", "bleak", "bless", "boast", "boost", "bored", "bread", "bring", "broke", "buyer",
+"cable", "cakes", "canoe", "cards", "cargo", "cause", "chair", "cheap", "chips", "choke", "climb", "clove",
+"coact", "coins", "comic", "cough", "count", "cover", "crane", "crash", "crude", "cruel", "cubic", "curry",
+"dairy", "delay", "dance", "dense", "desks", "diner", "dines", "dozen", "draft", "dream", "drink", "drown",
+"drunk", "dusts", "dusty",
+"early", "eight", "elder", "enter", "equal", "equip", "erode", "evens", "event", "exact", "exams", "excel",
+"extra",
+"fancy", "fares", "fence", "fibre", "fifty", "filed", "files", "final", "first", "floor", "flour", "flute",
+"focus", "foggy", "front", "fruit",
+"genie", "giant", "glare", "glaze", "gleam", "glory", "glows", "grave", "great", "grids", "group", "grove",
+"guess", "guest",
+"harps", "hawks", "heavy", "house", "humor",
+"ideal", "index", "infer", "inked", "ivory",
+"judge",
+"knock",
+"laces", "large", "lawny", "learn", "light", "lilac", "linen", "lofts", "loose", "lucky", "lunar", "lyric",
+"madam", "magic", "major", "malts", "manor", "maple", "march", "marry", "merit", "moist", "molar", "motto",
+"mourn", "mouse", "muddy",
+"nacho", "novel", "nurse",
+"odeon", "offer", "optic",
+"pages", "panda", "pants", "pause", "peace", "pedal", "pesto", "piano", "piece", "piety", "pings", "pious",
+"pivot", "place", "plant", "plate", "pound", "prime", "prize", "probe", "prose", "proud", "prune", "puppy",
+"pylon",
+"quiet",
+"rally", "refer", "remit", "renew", "repel", "reset", "roach", "rocky", "roofs", "rooks", "rough", "royal",
+"rusty",
+"salad", "scarf", "scoop", "scoot", "scope", "score", "scorn", "shaft", "share", "sharp", "sheds", "shine",
+"share", "shiny", "shirt", "shore", "shrub", "silly", "sixty", "skate", "socks", "sound", "spade", "spare",
+"spend", "spent", "squad", "stack", "stand", "stare", "stars", "start", "stats", "steam", "stick", "stoop",
+"storm", "story", "sunny", "sweat", "swept", "swift", "swing", "sword",
+"tally", "talon", "tempt", "tench", "tents", "these", "thick", "thief", "those", "tidal", "tiger", "title",
+"today", "track", "train", "tread", "trend", "trick", "trust", "tuned", "twigs", "twist",
+"unbid", "unbox", "uncap", "upend", "upper", "upset",
+"valid", "vends", "verge", "verse", "vines", "visit",
+"weary", "wheat", "wheel", "whole", "worth", "wound", "wrist",
+"yeast",
+"zooms"
 };
 
-uword3 = create_upper_array(word3, sizeof(word3) / sizeof(char *));
-uword4 = create_upper_array(word4, sizeof(word4) / sizeof(char *));
-uword5 = create_upper_array(word5, sizeof(word5) / sizeof(char *));
+if (upper)
+    {
+    uword3 = create_upper_array(word3, sizeof(word3) / sizeof(char *));
+    uword4 = create_upper_array(word4, sizeof(word4) / sizeof(char *));
+    uword5 = create_upper_array(word5, sizeof(word5) / sizeof(char *));
+    }
 
 for(w3 = 0; w3 < (sizeof(word3) / sizeof(char *)); w3++)
 	{
@@ -681,66 +704,80 @@ for(w3 = 0; w3 < (sizeof(word3) / sizeof(char *)); w3++)
 		{
 		for(w5 = 0; w5 < (sizeof(word5) / sizeof(char *)); w5++)
 			{
-			snprintf(pskstring, 16, pskmask,  word3[w3],  word4[w4],  word5[w5]);
-			fputs(pskstring, fhout);
-			snprintf(pskstring, 16, pskmask, uword3[w3],  word4[w4],  word5[w5]);
-			fputs(pskstring, fhout);
-			snprintf(pskstring, 16, pskmask,  word3[w3], uword4[w4],  word5[w5]);
-			fputs(pskstring, fhout);
-			snprintf(pskstring, 16, pskmask,  word3[w3],  word4[w4], uword5[w5]);
-			fputs(pskstring, fhout);
+			if (upper)
+			    {
+			    snprintf(pskstring, 16, pskmask, uword3[w3],  word4[w4],  word5[w5]);
+			    fputs(pskstring, fhout);
+			    snprintf(pskstring, 16, pskmask,  word3[w3], uword4[w4],  word5[w5]);
+			    fputs(pskstring, fhout);
+			    snprintf(pskstring, 16, pskmask,  word3[w3],  word4[w4], uword5[w5]);
+			    fputs(pskstring, fhout);
 
-			snprintf(pskstring, 16, pskmask,  word3[w3],  word5[w5],  word4[w4]);
-			fputs(pskstring, fhout);
-			snprintf(pskstring, 16, pskmask, uword3[w3],  word5[w5],  word4[w4]);
-			fputs(pskstring, fhout);
-			snprintf(pskstring, 16, pskmask,  word3[w3], uword5[w5],  word4[w4]);
-			fputs(pskstring, fhout);
-			snprintf(pskstring, 16, pskmask,  word3[w3],  word5[w5], uword4[w4]);
-			fputs(pskstring, fhout);
+			    snprintf(pskstring, 16, pskmask, uword3[w3],  word5[w5],  word4[w4]);
+			    fputs(pskstring, fhout);
+			    snprintf(pskstring, 16, pskmask,  word3[w3], uword5[w5],  word4[w4]);
+			    fputs(pskstring, fhout);
+			    snprintf(pskstring, 16, pskmask,  word3[w3],  word5[w5], uword4[w4]);
+			    fputs(pskstring, fhout);
 
-			snprintf(pskstring, 16, pskmask,  word4[w4],  word3[w3],  word5[w5]);
-			fputs(pskstring, fhout);
-			snprintf(pskstring, 16, pskmask, uword4[w4],  word3[w3],  word5[w5]);
-			fputs(pskstring, fhout);
-			snprintf(pskstring, 16, pskmask,  word4[w4], uword3[w3],  word5[w5]);
-			fputs(pskstring, fhout);
-			snprintf(pskstring, 16, pskmask,  word4[w4],  word3[w3], uword5[w5]);
-			fputs(pskstring, fhout);
+			    snprintf(pskstring, 16, pskmask, uword4[w4],  word3[w3],  word5[w5]);
+			    fputs(pskstring, fhout);
+			    snprintf(pskstring, 16, pskmask,  word4[w4], uword3[w3],  word5[w5]);
+			    fputs(pskstring, fhout);
+			    snprintf(pskstring, 16, pskmask,  word4[w4],  word3[w3], uword5[w5]);
+			    fputs(pskstring, fhout);
 
-			snprintf(pskstring, 16, pskmask,  word4[w4],  word5[w5],  word3[w3]);
-			fputs(pskstring, fhout);
-			snprintf(pskstring, 16, pskmask, uword4[w4],  word5[w5],  word3[w3]);
-			fputs(pskstring, fhout);
-			snprintf(pskstring, 16, pskmask,  word4[w4], uword5[w5],  word3[w3]);
-			fputs(pskstring, fhout);
-			snprintf(pskstring, 16, pskmask,  word4[w4],  word5[w5], uword3[w3]);
-			fputs(pskstring, fhout);
+			    snprintf(pskstring, 16, pskmask, uword4[w4],  word5[w5],  word3[w3]);
+			    fputs(pskstring, fhout);
+			    snprintf(pskstring, 16, pskmask,  word4[w4], uword5[w5],  word3[w3]);
+			    fputs(pskstring, fhout);
+			    snprintf(pskstring, 16, pskmask,  word4[w4],  word5[w5], uword3[w3]);
+			    fputs(pskstring, fhout);
 
-			snprintf(pskstring, 16, pskmask,  word5[w5],  word3[w3],  word4[w4]);
-			fputs(pskstring, fhout);
-			snprintf(pskstring, 16, pskmask, uword5[w5],  word3[w3],  word4[w4]);
-			fputs(pskstring, fhout);
-			snprintf(pskstring, 16, pskmask,  word5[w5], uword3[w3],  word4[w4]);
-			fputs(pskstring, fhout);
-			snprintf(pskstring, 16, pskmask,  word5[w5],  word3[w3], uword4[w4]);
-			fputs(pskstring, fhout);
+			    snprintf(pskstring, 16, pskmask, uword5[w5],  word3[w3],  word4[w4]);
+			    fputs(pskstring, fhout);
+			    snprintf(pskstring, 16, pskmask,  word5[w5], uword3[w3],  word4[w4]);
+			    fputs(pskstring, fhout);
+			    snprintf(pskstring, 16, pskmask,  word5[w5],  word3[w3], uword4[w4]);
+			    fputs(pskstring, fhout);
 
-			snprintf(pskstring, 16, pskmask,  word5[w5],  word4[w4],  word3[w3]);
-			fputs(pskstring, fhout);
-			snprintf(pskstring, 16, pskmask, uword5[w5],  word4[w4],  word3[w3]);
-			fputs(pskstring, fhout);
-			snprintf(pskstring, 16, pskmask,  word5[w5], uword4[w4],  word3[w3]);
-			fputs(pskstring, fhout);
-			snprintf(pskstring, 16, pskmask,  word5[w5],  word4[w4], uword3[w3]);
-			fputs(pskstring, fhout);
+			    snprintf(pskstring, 16, pskmask, uword5[w5],  word4[w4],  word3[w3]);
+			    fputs(pskstring, fhout);
+			    snprintf(pskstring, 16, pskmask,  word5[w5], uword4[w4],  word3[w3]);
+			    fputs(pskstring, fhout);
+			    snprintf(pskstring, 16, pskmask,  word5[w5],  word4[w4], uword3[w3]);
+			    fputs(pskstring, fhout);
+			    }
+			else
+			    {
+			    snprintf(pskstring, 16, pskmask,  word3[w3],  word4[w4],  word5[w5]);
+			    fputs(pskstring, fhout);
+
+			    snprintf(pskstring, 16, pskmask,  word3[w3],  word5[w5],  word4[w4]);
+			    fputs(pskstring, fhout);
+
+			    snprintf(pskstring, 16, pskmask,  word4[w4],  word3[w3],  word5[w5]);
+			    fputs(pskstring, fhout);
+
+			    snprintf(pskstring, 16, pskmask,  word4[w4],  word5[w5],  word3[w3]);
+			    fputs(pskstring, fhout);
+
+			    snprintf(pskstring, 16, pskmask,  word5[w5],  word3[w3],  word4[w4]);
+			    fputs(pskstring, fhout);
+
+			    snprintf(pskstring, 16, pskmask,  word5[w5],  word4[w4],  word3[w3]);
+			    fputs(pskstring, fhout);
+			    }
 			}
 		}
 	}
 
-free_array(uword3, sizeof(word3) / sizeof(char *));
-free_array(uword4, sizeof(word4) / sizeof(char *));
-free_array(uword5, sizeof(word5) / sizeof(char *));
+if (upper)
+    {
+    free_array(uword3, sizeof(word3) / sizeof(char *));
+    free_array(uword4, sizeof(word4) / sizeof(char *));
+    free_array(uword5, sizeof(word5) / sizeof(char *));
+    }
 
 return;
 }
@@ -748,113 +785,81 @@ return;
 /* source: soxrok2212, https://github.com/soxrok2212/PSKracker/tree/master/dicts/altice-optimum */
 static void keywritealticeoptimum(FILE *fhout)
 {
-static unsigned int w, i, j; // w1
+static unsigned int w, i;
+char si[7] = {0};
 
 static const char *word[] =
 {
-"amber", "aqua",
-"brick", "bronze", "burgundy",
+"amber", "aqua", "auburn",
+"beige", "blue", "brick", "bronze", "burgundy",
 "chestnut", "cobalt", "copper", "coral", "cordovan", "crimson", "cyan",
 "emerald",
-"garnet", "gold", "green", "grey",
+"garnet", "gold", "granite", "green", "grey",
 "indigo",
-"lavender", "lemon",
-"magenta",
-"olive", "orchid",
-"peach", "periwinkle", "pewter", "plum", "purple",
+"jade",
+"lavender", "lemon", "lime", "linen",
+"magenta", "maroon", "mauve",
+"navy",
+"olive", "orange", "orchid",
+"peach", "periwinkle", "pewter", "pink", "plum", "purple",
 "rose",
-"sage", "sepia", "silver",
-"teal", "turquoise"
+"sage", "sepia", "sienna", "silver", "slate",
+"taupe", "teal", "turquoise"
+};
+
+for (i = 0; i < 1000000; i++)
+{
+    sprintf(si, "%06d", i);
+    for (w = 0; w < (sizeof(word) / sizeof(char *)); w++ )
+	    {
+	        // 2-4
+	        //fprintf(fhout, "%s-%.2s-%.4s\n", word[w], si, si+2);
+	        fprintf(fhout, "%.2s-%s-%.4s\n", si, word[w], si+2);
+	        fprintf(fhout, "%.2s-%.4s-%s\n", si, si+2, word[w]);
+	        // 3-3
+	        fprintf(fhout, "%s-%.3s-%.3s\n", word[w], si, si+3);
+	        fprintf(fhout, "%.3s-%s-%.3s\n", si, word[w], si+3);
+	        fprintf(fhout, "%.3s-%.3s-%s\n", si, si+3, word[w]);
+	        // 4-2
+	        fprintf(fhout, "%s-%.4s-%.2s\n", word[w], si, si+4);
+	        fprintf(fhout, "%.4s-%s-%.2s\n", si, word[w], si+4);
+	        //fprintf(fhout, "%.4s-%.2s-%s\n", si, si+4, word[w]);
+	    }
+}
+
+return;
+}
+/*===========================================================================*/
+static void keywriteasus(FILE *fhout)
+{
+static unsigned int w, i;
+
+static const char *word[] =
+{
+"account", "actor", "alpha", "amazing", "answer", "anyway", "athlete", "autumn", "avenue",
+"bakery", "balcony", "banking", "battery", "bedroom", "bicycle", "birthday", "browser",
+"calendar", "camping", "category", "center", "charming", "cinema", "cocoa", "coffee", "cupid",
+"december", "delivery", "delta", "dollar", "donkey", "drama", "dream",
+"economy", "enjoy", "eternity", "everyday", "examiner", "export", "extra", "eyebrow",
+"february", "feeling", "flower", "fortune", "founder", "four",
+"gasoline", "giant", "glory", "golden", "grape", "guide",
+"haircut", "handsome", "harmony", "hawk", "header", "hiking", "hometown", "honor",
+"hundred", "hunter",
+"jaguar", "jazz", "jogging", "july", "june", "jumper", "junior", "justdoit",
+"keeper", "keyboard", "kingdom", "kiss", "kitchen", "knife", "knuckle",
+"leopard", "letter", "lighting", "literacy", "lucky", "lunar",
+"majesty", "mankind", "mars", "memory", "mercy", "momentum", "morning", "museum",
+"network", "next", "night", "noodle", "notebook", "nurse",
+"painter", "pajamas", "panda", "parttime", "passion", "popcorn", "puma", "puppet", "pyramid",
+"random", "ranking", "reading", "relax", "remark", "revenue", "ribbon",
+"salon", "saturday", "science", "sexy", "soccer", "sour", "spider", "star", "sugar", "sunday"
 };
 
 for (w = 0; w < (sizeof(word) / sizeof(char *)); w++ )
 	{
 	for (i = 0; i < 10000; i++)
 		{
-		for (j = 0; j < 10000; j++)
-			{
-			// 2-2 test
-			/*
-			if (i < 100 && j < 100)
-				{
-				fprintf(fhout, "%s-%02d-%02d\n", word[w], i, j);
-				fprintf(fhout, "%02d-%s-%02d\n", i, word[w], j);
-				fprintf(fhout, "%02d-%02d-%s\n", i, j, word[w]);
-				}
-			*/
-			// 2-3 test
-			/*
-			if (i < 100 && j < 1000)
-				{
-				fprintf(fhout, "%s-%02d-%03d\n", word[w], i, j);
-				fprintf(fhout, "%02d-%s-%03d\n", i, word[w], j);
-				fprintf(fhout, "%02d-%03d-%s\n", i, j, word[w]);
-				}
-			*/
-			// 2-4
-			if (i < 100  && j < 10000)
-				{
-				//fprintf(fhout, "%s-%02d-%04d\n", word[w], i, j); // test
-				fprintf(fhout, "%02d-%s-%04d\n", i, word[w], j);
-				//fprintf(fhout, "%02d-%04d-%s\n", i, j, word[w]); // test
-				}
-			// 3-2 test
-			/*
-			if (i < 1000 && j < 100)
-				{
-				fprintf(fhout, "%s-%03d-%02d\n", word[w], i, j);
-				fprintf(fhout, "%03d-%s-%02d\n", i, word[w], j);
-				fprintf(fhout, "%03d-%02d-%s\n", i, j, word[w]);
-				}
-			*/
-			// 3-3
-			if (i < 1000 && j < 1000)
-				{
-				fprintf(fhout, "%s-%03d-%03d\n", word[w], i, j);
-				fprintf(fhout, "%03d-%s-%03d\n", i, word[w], j);
-				fprintf(fhout, "%03d-%03d-%s\n", i, j, word[w]);
-				}
-			// 4-2
-			if (i < 10000 && j < 100)
-				{
-				fprintf(fhout, "%s-%04d-%02d\n", word[w], i, j);
-				fprintf(fhout, "%04d-%s-%02d\n", i, word[w], j);
-				//fprintf(fhout, "%04d-%02d-%s\n", i, j, word[w]); // test
-				}
-			}
-
-		// test two words
-		/*
-			for (w1 = 0; w1 < (sizeof(word) / sizeof(char *)); w1++ )
-				{
-				//if (w == w1) continue;
-
-				if (i < 10)
-					{
-					fprintf(fhout, "%s-%01d-%s\n", word[w], i, word[w1]);
-					fprintf(fhout, "%01d-%s-%s\n", i, word[w], word[w1]);
-					fprintf(fhout, "%s-%s-%01d\n", word[w], word[w1], i);
-					}
-				if (i < 100)
-					{
-					fprintf(fhout, "%s-%02d-%s\n", word[w], i, word[w1]);
-					fprintf(fhout, "%02d-%s-%s\n", i, word[w], word[w1]);
-					fprintf(fhout, "%s-%s-%02d\n", word[w], word[w1], i);
-					}
-				if (i < 1000)
-					{
-					fprintf(fhout, "%s-%03d-%s\n", word[w], i, word[w1]);
-					fprintf(fhout, "%03d-%s-%s\n", i, word[w], word[w1]);
-					fprintf(fhout, "%s-%s-%03d\n", word[w], word[w1], i);
-					}
-				if (i < 10000)
-					{
-					fprintf(fhout, "%s-%04d-%s\n", word[w], i, word[w1]);
-					fprintf(fhout, "%04d-%s-%s\n", i, word[w], word[w1]);
-					fprintf(fhout, "%s-%s-%04d\n", word[w], word[w1], i);
-					}
-				}
-		*/
+		fprintf(fhout, "%s_%04d\n", word[w], i);
 		}
 	}
 
@@ -866,7 +871,7 @@ static void keywriteweakpass(FILE *fhout)
 static size_t w;
 static unsigned int y;
 
-static char pskstring[PSKSTRING_LEN_MAX] = {};
+static char pskstring[PSKSTRING_LEN_MAX] = { 0 };
 static const char *weakword[] =
 {
 "00000000", "0000000000", "01234567", "0123456789", "0123456789012345", "022844444", "0987654321",
@@ -935,6 +940,56 @@ for(y = 0; y < 1000; y++)
 	{
 	snprintf(pskstring, PSKSTRING_LEN_MAX, "%03d%03d%03d", y, y, y);
 	writepsk(fhout, pskstring);
+	}
+return;
+}
+/*===========================================================================*/
+static void keywritesimple(FILE *fhout)
+{
+static int a,b,c;
+
+for(a =0x20; a < 0x7f; a++)
+ for(b = 0x20; b < 0x7f; b++)
+	{
+	fprintf(fhout, "12341234%c%c\n", a, b);
+	fprintf(fhout, "%c%c12341234\n", a, b);
+	fprintf(fhout, "1234512345%c%c\n", a, b);
+	fprintf(fhout, "%c%c1234512345\n", a, b);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c\n", a, a, b, b, a, a, b, b);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c%c\n", a, a, b, b, a, a, b, b, a, a);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c%c%c%c\n", a, a, b, b, a, a, b, b, a, a, b, b);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c\n", a, b, a, b, a, b, a, b);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c\n", a, b, a, b, a, b, a, b, a);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c%c\n", a, b, a, b, a, b, a, b, a, b);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c%c%c\n", a, b, a, b, a, b, a, b, a, b, a);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c%c%c%c\n", a, b, a, b, a, b, a, b, a, b, a, b);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c\n", a, b, b, b, b, b, b, b);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c\n", a, b, b, b, b, b, b, b, b);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c%c\n", a, b, b, b, b, b, b, b, b, b);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c%c%c\n", a, b, b, b, b, b, b, b, b, b, b);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c%c%c%c\n", a, b, b, b, b, b, b, b, b, b, b, b);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c\n", b, b, b, b, b, b, b, a);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c\n", b, b, b, b, b, b, b, b, a);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c%c\n", b, b, b, b, b, b, b, b, b, a);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c%c%c\n", b, b, b, b, b, b, b, b, b, b, a);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c%c%c%c\n", b, b, b, b, b, b, b, b, b, b, b, a);
+	}
+for(a =0x20; a < 0x7f; a++)
+ for(b =0x20; b < 0x7f; b++)
+  for(c =0x20; c < 0x7f; c++)
+	{
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c\n", a, b, c, a, b, c, a, b, c);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c\n", a, a, a, b, b, b, c, c, c);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c\n", a, c, c, c, c, c, c, b);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c\n", a, c, c, c, c, c, c, c, b);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c%c\n", a, c, c, c, c, c, c, c, c, b);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c\n", a, b, c, c, c, c, c, c);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c\n", a, b, c, c, c, c, c, c, c);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c%c\n", a, b, c, c, c, c, c, c, c, c);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c\n", c, c, c, c, c, c, a, b);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c\n", c, c, c, c, c, c, c, a, b);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c%c\n", c, c, c, c, c, c, c, c, a, b);
+	fprintf(fhout, "%c%c%c%c%c%c%c%c%c%c\n", a, b, b, b, b, c, c, c, c, a);
 	}
 return;
 }
@@ -1056,7 +1111,7 @@ return;
 static void keywriteyearyear(FILE *fhout)
 {
 static unsigned int y, y2, y3;
-static char pskstring[PSKSTRING_LEN_MAX] = {};
+static char pskstring[PSKSTRING_LEN_MAX] = { 0 };
 
 for(y = 1900; y <= thisyear; y++)
 	{
@@ -1084,7 +1139,7 @@ return;
 static void keywriteegn(FILE *fhout)
 {
 static unsigned int y, m, d, mc, i, j, c;
-static char pskstring[PSKSTRING_LEN_MAX] = {};
+static char pskstring[PSKSTRING_LEN_MAX] = { 0 };
 static unsigned int w[] = {2, 4, 8, 5, 10, 9, 7, 3, 6};
 
 for(y = 1950; y <= thisyear; y++)
@@ -1133,7 +1188,7 @@ static int ek;
 static char *ev;
 static unsigned int oui;
 
-static char essidtmp[PSKSTRING_LEN_MAX] = {};
+static char essidtmp[PSKSTRING_LEN_MAX] = { 0 };
 
 if(essidlen >= 6)
 	{
@@ -1190,7 +1245,7 @@ return;
 static void writeessidadd(FILE *fhout, char *essid)
 {
 static unsigned int c, d;
-static char essidstring[PSKSTRING_LEN_MAX +PSKSTRING_LEN_MAX +PSKSTRING_LEN_MAX] = {};
+static char essidstring[PSKSTRING_LEN_MAX +PSKSTRING_LEN_MAX +PSKSTRING_LEN_MAX] = { 0 };
 
 for(c = 22222; c <= 99999; c += 11111)
 	{
@@ -1397,7 +1452,7 @@ static int po;
 static int essidlentmp;
 static bool removeflag;
 
-static char essidtmp[PSKSTRING_LEN_MAX] = {};
+static char essidtmp[PSKSTRING_LEN_MAX] = { 0 };
 
 po = 0;
 removeflag = false;
@@ -1424,7 +1479,7 @@ return removeflag;
 static void writeessidsweeped(FILE *fhout, uint8_t essidlen, uint8_t *essid)
 {
 static int l1, l2;
-static uint8_t sweepstring[PSKSTRING_LEN_MAX] = {};
+static uint8_t sweepstring[PSKSTRING_LEN_MAX] = { 0 };
 
 for(l1 = 2; l1 <= essidlen; l1++)
 	{
@@ -1441,7 +1496,7 @@ return;
 static void testairtel(FILE *fhout, uint8_t essidlen, uint8_t *essid)
 {
 static int k;
-static char *air = "Airtel_";
+static const char *air = "Airtel_";
 
 if(airtelflag == true) return;
 if(essidlen < 7) return;
@@ -1455,9 +1510,9 @@ return;
 static void testalcatellinkzone(FILE *fhout, uint8_t essidlen, uint8_t *essid)
 {
 static int k1;
-static char *ali = "Alcatel LINKZONE ";
+static const char *ali = "Alcatel LINKZONE ";
 
-static char essidtmp[PSKSTRING_LEN_MAX] = {};
+static char essidtmp[PSKSTRING_LEN_MAX] = { 0 };
 
 if(essidlen != 21) return;
 if(memcmp(essid, ali, 17) != 0) return;
@@ -1474,7 +1529,7 @@ static void testarrisizzi(FILE *fhout, uint8_t essidlen, uint8_t *essid)
 {
 static int c;
 static uint32_t i;
-static char *izzi = "IZZI-";
+static const char *izzi = "IZZI-";
 
 static int fixseed2[] =
 {
@@ -1488,7 +1543,7 @@ if(memcmp(essid, izzi, 5) != 0) return;
 if((!isxdigit((unsigned char)essid[5])) || (!isxdigit((unsigned char)essid[6])) || (!isxdigit((unsigned char)essid[7])) || (!isxdigit((unsigned char)essid[8]))) return;
 for(i = 0; i < FIXSEED2_SIZE; i++)
 	{
-	for(c = 0; c < 0x100; c++) fprintf(fhout, "%06X%02X%C%C%C%C\n", fixseed2[i], c, essid[5], essid[6], essid[7], essid[8]);
+	for(c = 0; c < 0x100; c++) fprintf(fhout, "%06X%02X%lc%lc%lc%lc\n", fixseed2[i], c, essid[5], essid[6], essid[7], essid[8]);
 	}
 return;
 }
@@ -1496,12 +1551,12 @@ return;
 static void testarristg(FILE *fhout, uint8_t essidlen, uint8_t *essid)
 {
 static int k1;
-static char *dg860A = "DG860A";
-static char *tg852g = "TG852G";
-static char *tg862g = "TG862G";
-static char *dg1670A = "DG1670A";
-static char *sbg6580 = "SBG6580";
-static char *tg1672g = "TG1672G";
+static const char *dg860A = "DG860A";
+static const char *tg852g = "TG852G";
+static const char *tg862g = "TG862G";
+static const char *dg1670A = "DG1670A";
+static const char *sbg6580 = "SBG6580";
+static const char *tg1672g = "TG1672G";
 
 if(essidlen >= 8)
 	{
@@ -1525,17 +1580,17 @@ if(essidlen >= 8)
 if(essidlen >= 9)
 	{
 	if((!isxdigit((unsigned char)essid[7])) || (!isxdigit((unsigned char)essid[8]))) return;
-	if(memcmp(essid, dg1670A, 7) == 0) 
+	if(memcmp(essid, dg1670A, 7) == 0)
 		{
 		for(k1 = 0; k1 < 0x10000; k1++) fprintf(fhout, "DG1670A%04X%c%c\n", k1, essid[7], essid[8]);
 		return;
 		}
-	if(memcmp(essid, sbg6580, 7) == 0) 
+	if(memcmp(essid, sbg6580, 7) == 0)
 		{
 		for(k1 = 0; k1 < 0x10000; k1++) fprintf(fhout, "SBG6580%04X%c%c\n", k1, essid[7], essid[8]);
 		return;
 		}
-	if(memcmp(essid, tg1672g, 7) == 0) 
+	if(memcmp(essid, tg1672g, 7) == 0)
 		{
 		for(k1 = 0; k1 < 0x10000; k1++) fprintf(fhout, "TG1672G%04X%c%c\n", k1, essid[7], essid[8]);
 		return;
@@ -1547,9 +1602,9 @@ return;
 static void testaxtelxtremo(FILE *fhout, uint8_t essidlen, uint8_t *essid)
 {
 static int k1;
-static char *axtelxtremo = "AXTEL XTREMO-";
+static const char *axtelxtremo = "AXTEL XTREMO-";
 
-static char essidtmp[PSKSTRING_LEN_MAX] = {};
+static char essidtmp[PSKSTRING_LEN_MAX] = { 0 };
 
 if(essidlen != 17) return;
 if(memcmp(essid, axtelxtremo, 13) != 0) return;
@@ -1565,9 +1620,9 @@ return;
 static void testattwifi(FILE *fhout, uint8_t essidlen, uint8_t *essid)
 {
 static int k1, k2, k3, k4;
-static char *attwifi = "ATT-WIFI-";
+static const char *attwifi = "ATT-WIFI-";
 
-static char essidtmp[PSKSTRING_LEN_MAX] = {};
+static char essidtmp[PSKSTRING_LEN_MAX] = { 0 };
 
 if(essidlen != 13) return;
 if(memcmp(essid, attwifi, 9) != 0) return;
@@ -1586,9 +1641,9 @@ return;
 static void testcabovisao(FILE *fhout, uint8_t essidlen, uint8_t *essid)
 {
 static int k1;
-static char *cabovisao = "Cabovisao-";
+static const char *cabovisao = "Cabovisao-";
 
-static char essidtmp[PSKSTRING_LEN_MAX] = {};
+static char essidtmp[PSKSTRING_LEN_MAX] = { 0 };
 
 if(essidlen != 14) return;
 if(memcmp(essid, cabovisao, 10) != 0) return;
@@ -1608,7 +1663,7 @@ return;
 static void testcg3000dv2(FILE *fhout, uint8_t essidlen, uint8_t *essid)
 {
 static int k1;
-static char *cg3000dv2 = "CG3000DV2";
+static const char *cg3000dv2 = "CG3000DV2";
 
 if(essidlen < 11) return;
 if(memcmp(essid, cg3000dv2, 9) != 0) return;
@@ -1620,8 +1675,8 @@ return;
 static void testcpsrf(FILE *fhout, uint8_t essidlen, uint8_t *essid)
 {
 static int k1;
-static char *cpcrf1 = "CoolpadSurf_";
-static char *cpcrf2 = "Coolpad Surf ";
+static const char *cpcrf1 = "CoolpadSurf_";
+static const char *cpcrf2 = "Coolpad Surf ";
 
 if(essidlen < 16) return;
 if(memcmp(essid, cpcrf1, 12) == 0)
@@ -1705,7 +1760,7 @@ static int k1, k2;
 static char *ev;
 static const char *hotbox = "HOTBOX";
 
-static char essidtmp[PSKSTRING_LEN_MAX] = {};
+static char essidtmp[PSKSTRING_LEN_MAX] = { 0 };
 
 if(essidlen < 7) return;
 if(memcmp(essid, hotbox , 6) != 0) return;
@@ -1722,11 +1777,15 @@ ev = (char*)(essid +7);
 k2 = strtol(ev, NULL, 16);
 for(k1 = 0; k1 < 0x100; k1++)
 	{
+	snprintf(essidtmp, PSKSTRING_LEN_MAX, "086a0a%02x%04x", k1, k2);
+	writepsk(fhout, essidtmp);
 	snprintf(essidtmp, PSKSTRING_LEN_MAX, "2ce412%02x%04x", k1, k2);
 	writepsk(fhout, essidtmp);
 	snprintf(essidtmp, PSKSTRING_LEN_MAX, "4c17eb%02x%04x", k1, k2);
 	writepsk(fhout, essidtmp);
 	snprintf(essidtmp, PSKSTRING_LEN_MAX, "6c2e85%02x%04x", k1, k2);
+	writepsk(fhout, essidtmp);
+	snprintf(essidtmp, PSKSTRING_LEN_MAX, "700b01%02x%04x", k1, k2);
 	writepsk(fhout, essidtmp);
 	snprintf(essidtmp, PSKSTRING_LEN_MAX, "7c034c%02x%04x", k1, k2);
 	writepsk(fhout, essidtmp);
@@ -1744,6 +1803,8 @@ for(k1 = 0; k1 < 0x100; k1++)
 	writepsk(fhout, essidtmp);
 	snprintf(essidtmp, PSKSTRING_LEN_MAX, "e0cec3%02x%04x", k1, k2);
 	writepsk(fhout, essidtmp);
+	snprintf(essidtmp, PSKSTRING_LEN_MAX, "e8d11b%02x%04x", k1, k2);
+	writepsk(fhout, essidtmp);
 	snprintf(essidtmp, PSKSTRING_LEN_MAX, "fcb4e6%02x%04x", k1, k2);
 	writepsk(fhout, essidtmp);
 	}
@@ -1757,7 +1818,7 @@ static int k1, k2;
 static const char *a1 = "A1_";
 static const char *mtel = "M-Tel_";
 
-static char essidtmp[PSKSTRING_LEN_MAX] = {};
+static char essidtmp[PSKSTRING_LEN_MAX] = { 0 };
 
 if(essidlen == 7)
 	{
@@ -1769,6 +1830,8 @@ if(essidlen == 7)
 				for(k2 = 0; k2 < 0x100; k2++)
 					{
 					snprintf(essidtmp, PSKSTRING_LEN_MAX, "48575443%02X%c%c%c%c%02X", k1, essid[3], essid[4], essid[5], essid[6], k2);
+					writepsk(fhout, essidtmp);
+					snprintf(essidtmp, PSKSTRING_LEN_MAX, "48575443%02X%02X%c%c%c%c", k1, k2, essid[3], essid[4], essid[5], essid[6]);
 					writepsk(fhout, essidtmp);
 				}
 			}
@@ -1801,7 +1864,7 @@ static void testmywifi(FILE *fhout, uint8_t essidlen, uint8_t *essid)
 static int k1;
 static const char *mywifi = "MY WIFI ";
 
-static char essidtmp[PSKSTRING_LEN_MAX] = {};
+static char essidtmp[PSKSTRING_LEN_MAX] = { 0 };
 
 if(essidlen != 12) return;
 if(memcmp(essid, mywifi, 8) != 0) return;
@@ -1818,7 +1881,7 @@ static void testnet2g(FILE *fhout, uint8_t essidlen, uint8_t *essid)
 static int k;
 static const char *net2g = "NET_2G";
 
-static char essidtmp[PSKSTRING_LEN_MAX] = {};
+static char essidtmp[PSKSTRING_LEN_MAX] = { 0 };
 
 if(essidlen < 12) return;
 if(memcmp(essid, net2g, 6) != 0) return;
@@ -1826,7 +1889,7 @@ if((isxdigit((unsigned char)essid[6])) && (isxdigit((unsigned char)essid[7])) &&
 	{
 	for(k = 0; k < 0x100; k++)
 		{
-		snprintf(essidtmp, PSKSTRING_LEN_MAX, "%02X%C%C%C%C%C%C", k, essid[6], essid[7], essid[8], essid[9], essid[10], essid[11]);
+		snprintf(essidtmp, PSKSTRING_LEN_MAX, "%02X%lc%lc%lc%lc%lc%lc", k, essid[6], essid[7], essid[8], essid[9], essid[10], essid[11]);
 		writepsk(fhout, essidtmp);
 		}
 	}
@@ -1844,21 +1907,21 @@ if((isdigit((unsigned char)essid[11])) && (isdigit((unsigned char)essid[12])) &&
 	{
     for(k = 0; k < 1000; k++)
 	    {
-	    fprintf(fhout,   "%03d%C%C%C%C0\n", k, essid[11], essid[12], essid[13], essid[14]);
-	    fprintf(fhout, "15%03d%C%C%C%C0\n", k, essid[11], essid[12], essid[13], essid[14]);
-	    fprintf(fhout, "16%03d%C%C%C%C0\n", k, essid[11], essid[12], essid[13], essid[14]);
-	    fprintf(fhout, "24%03d%C%C%C%C0\n", k, essid[11], essid[12], essid[13], essid[14]);
-	    fprintf(fhout, "31%03d%C%C%C%C0\n", k, essid[11], essid[12], essid[13], essid[14]);
-	    fprintf(fhout, "33%03d%C%C%C%C0\n", k, essid[11], essid[12], essid[13], essid[14]);
-	    fprintf(fhout, "37%03d%C%C%C%C0\n", k, essid[11], essid[12], essid[13], essid[14]);
-	    fprintf(fhout, "38%03d%C%C%C%C0\n", k, essid[11], essid[12], essid[13], essid[14]);
-	    fprintf(fhout, "40%03d%C%C%C%C0\n", k, essid[11], essid[12], essid[13], essid[14]);
-	    fprintf(fhout, "61%03d%C%C%C%C0\n", k, essid[11], essid[12], essid[13], essid[14]);
-	    fprintf(fhout, "71%03d%C%C%C%C0\n", k, essid[11], essid[12], essid[13], essid[14]);
+	    fprintf(fhout,   "%03d%lc%lc%lc%lc0\n", k, essid[11], essid[12], essid[13], essid[14]);
+	    fprintf(fhout, "15%03d%lc%lc%lc%lc0\n", k, essid[11], essid[12], essid[13], essid[14]);
+	    fprintf(fhout, "16%03d%lc%lc%lc%lc0\n", k, essid[11], essid[12], essid[13], essid[14]);
+	    fprintf(fhout, "24%03d%lc%lc%lc%lc0\n", k, essid[11], essid[12], essid[13], essid[14]);
+	    fprintf(fhout, "31%03d%lc%lc%lc%lc0\n", k, essid[11], essid[12], essid[13], essid[14]);
+	    fprintf(fhout, "33%03d%lc%lc%lc%lc0\n", k, essid[11], essid[12], essid[13], essid[14]);
+	    fprintf(fhout, "37%03d%lc%lc%lc%lc0\n", k, essid[11], essid[12], essid[13], essid[14]);
+	    fprintf(fhout, "38%03d%lc%lc%lc%lc0\n", k, essid[11], essid[12], essid[13], essid[14]);
+	    fprintf(fhout, "40%03d%lc%lc%lc%lc0\n", k, essid[11], essid[12], essid[13], essid[14]);
+	    fprintf(fhout, "61%03d%lc%lc%lc%lc0\n", k, essid[11], essid[12], essid[13], essid[14]);
+	    fprintf(fhout, "71%03d%lc%lc%lc%lc0\n", k, essid[11], essid[12], essid[13], essid[14]);
 	    }
     for(k = 0; k < 10000; k++)
 	    {
-	    fprintf(fhout, "%04d%C%C%C%C0\n", k, essid[11], essid[12], essid[13], essid[14]);
+	    fprintf(fhout, "%04d%lc%lc%lc%lc0\n", k, essid[11], essid[12], essid[13], essid[14]);
 	    }
 	}
 return;
@@ -1966,7 +2029,7 @@ if((!isxdigit((unsigned char)essid[8])) || (!isxdigit((unsigned char)essid[9])) 
 
 for(i = 0; i < FIX_SIZE; i++)
 	{
-	for(c = 0; c < 0x100; c++) fprintf(fhout, "%04X%02X%C%C%C%C\n", fix[i], c, essid[8], essid[9], essid[10], essid[11]);
+	for(c = 0; c < 0x100; c++) fprintf(fhout, "%04X%02X%lc%lc%lc%lc\n", fix[i], c, essid[8], essid[9], essid[10], essid[11]);
 	}
 return;
 }
@@ -1976,7 +2039,7 @@ static void testukrtelecom(FILE *fhout, uint8_t essidlen, uint8_t *essid)
 static int k;
 static const char *ukrtelekom = "UKrtelecom";
 
-static char essidtmp[PSKSTRING_LEN_MAX] = {};
+static char essidtmp[PSKSTRING_LEN_MAX] = { 0 };
 
 if(ukrtelecomflag == true) return;
 if(essidlen < 10) return;
@@ -1990,12 +2053,25 @@ ukrtelecomflag = true;
 return;
 }
 /*===========================================================================*/
+static void testwe(FILE *fhout, uint8_t essidlen, uint8_t *essid)
+{
+static int k1;
+
+if(essidlen != 8) return;
+if(essid[0] != 'W') return;
+if(essid[1] != 'E') return;
+if(!isxdigit((unsigned char)essid[6])) return;
+if(!isxdigit((unsigned char)essid[7])) return;
+for(k1 = 0; k1 < 0x100000; k1++) fprintf(fhout, "%c%c0%05x\n", tolower(essid[6]), tolower(essid[7]), k1);
+return;
+}
+/*===========================================================================*/
 static void testwifirsu(FILE *fhout, uint8_t essidlen, uint8_t *essid)
 {
 static int k1;
 static const char *wifirsu = "WiFiRSU_";
 
-static char essidtmp[PSKSTRING_LEN_MAX] = {};
+static char essidtmp[PSKSTRING_LEN_MAX] = { 0 };
 
 if(essidlen < 10) return;
 if(memcmp(essid, wifirsu, 8) != 0) return;
@@ -2055,10 +2131,7 @@ for(k2 = 0; k2 < 10; k2++)
 		{
 		for(k6 = 0; k6 <= 0x0f; k6++)
 			{
-			for(k7 = 0; k7 < 100; k7++)
-				{
-				fprintf(fhout, "%c%d%c%02d%02d%02d%02d%d%02d%02d\n", k1, k2, k3, k4, hextable[k5], hextable[k6], k7, k2, k8, k9);
-				}
+			for(k7 = 0; k7 < 100; k7++) fprintf(fhout, "%c%d%c%02d%02d%02d%02d%d%02d%02d\n", k1, k2, k3, k4, hextable[k5], hextable[k6], k7, k2, k8, k9);
 			}
 		}
 	}
@@ -2068,7 +2141,7 @@ return;
 static void testx2g(FILE *fhout, uint8_t essidlen, uint8_t *essid)
 {
 static int k;
-static char *x2g = "_2G";
+static const char *x2g = "_2G";
 
 if(essidlen < 9) return;
 if(memcmp(&essid[essidlen -9], x2g, 2) != 0) return;
@@ -2080,7 +2153,7 @@ return;
 static void testzhone(FILE *fhout, uint8_t essidlen, uint8_t *essid)
 {
 static int k;
-static char *zhone = "Zhone_";
+static const char *zhone = "Zhone_";
 
 if(znidflag == true) return;
 if(essidlen < 6) return;
@@ -2094,10 +2167,9 @@ return;
 static void prepareessid(FILE *fhout, uint8_t essidlen, uint8_t *essid)
 {
 static int pi, po;
-static char essidtmp[PSKSTRING_LEN_MAX] = {};
+static char essidtmp[PSKSTRING_LEN_MAX] = { 0 };
 
 if((essidlen == 0) || (essidlen > 32)) return;
-testx2g(fhout, essidlen, essid);
 testairtel(fhout, essidlen, essid);
 testalcatellinkzone(fhout, essidlen, essid);
 testarrisizzi(fhout, essidlen, essid);
@@ -2120,10 +2192,11 @@ testrtk(fhout, essidlen, essid);
 testtechnicolor(fhout, essidlen, essid);
 testtelered(fhout, essidlen, essid);
 testukrtelecom(fhout, essidlen, essid);
+testwe(fhout, essidlen, essid);
 testwifirsu(fhout, essidlen, essid);
 testwlan(fhout, essidlen, essid);
+testx2g(fhout, essidlen, essid);
 testzhone(fhout, essidlen, essid);
-
 if(noessidcombinationflag == true) return;
 writeessidsweeped(fhout, essidlen, essid);
 po = 0;
@@ -2141,21 +2214,23 @@ static void processessids(FILE *fhout)
 {
 static int c;
 static apessidl_t *zeiger;
-static apessidl_t *zeiger1;
 
 qsort(apessidliste, apessidcount, APESSIDLIST_SIZE, sort_apessidlist_by_essid);
 zeiger = apessidliste;
-for(c = 0; c < apessidcount; c++)
+if( apessidcount == 0) return;
+essidglen = zeiger->essidlen;
+prepareessid(fhout, zeiger->essidlen, zeiger->essid);
+for(c = 1; c < apessidcount; c++)
 	{
-	essidglen = zeiger->essidlen;
-	if(c == 0) prepareessid(fhout, zeiger->essidlen, zeiger->essid);
-	else
+	if(zeiger->essidlen != (zeiger -1)->essidlen)
 		{
-		zeiger1 = zeiger -1;
-		if(zeiger->essidlen != zeiger1->essidlen)
-			{
-			if(memcmp(zeiger->essid, zeiger1->essid, zeiger->essidlen) != 0) prepareessid(fhout, zeiger->essidlen, zeiger->essid);
-			}
+		essidglen = zeiger->essidlen;
+		prepareessid(fhout, zeiger->essidlen, zeiger->essid);
+		}
+	else if(memcmp(zeiger->essid, (zeiger -1)->essid, zeiger->essidlen) != 0)
+		{
+		essidglen = zeiger->essidlen;
+		prepareessid(fhout, zeiger->essidlen, zeiger->essid);
 		}
 	zeiger++;
 	}
@@ -2248,6 +2323,11 @@ static int pin;
 pin = (macaddr & 0xffffff) % 10000000;
 pin = ((pin * 10) + wpspinchecksum(pin));
 fprintf(fhout, "%08d\n", pin);
+
+pin = (((macaddr >> 24) &0xff) *256 *256) +(((macaddr >> 16) &0xff) *256) + ((macaddr >> 8) &0xff);
+pin = pin % 10000000;
+pin = ((pin * 10) + wpspinchecksum(pin));
+fprintf(fhout, "%08d\n", pin);
 return;
 }
 /*===========================================================================*/
@@ -2265,7 +2345,7 @@ return;
 /*===========================================================================*/
 static void writebssid(FILE *fhout, unsigned long long int macaddr)
 {
-static char pskstring[PSKSTRING_LEN_MAX] = {};
+static char pskstring[PSKSTRING_LEN_MAX] = { 0 };
 
 snprintf(pskstring, PSKSTRING_LEN_MAX, "0%012llx", macaddr);
 writepsk(fhout, pskstring);
@@ -2311,7 +2391,7 @@ static void test000559(FILE *fhout, unsigned long long int macaddr)
 static int k1;
 static unsigned long long int oui;
 
-static char essidtmp[PSKSTRING_LEN_MAX] = {};
+static char essidtmp[PSKSTRING_LEN_MAX] = { 0 };
 
 oui = macaddr &0xffffff000000L;
 oui = oui >> 24;
@@ -2334,22 +2414,43 @@ static unsigned long long int nic;
 static unsigned int nici;
 static int swap;
 static int me;
-static char pskstring[PSKSTRING_LEN_MAX] = {};
+static char pskstring[PSKSTRING_LEN_MAX] = { 0 };
 
-fprintf(stdout, "%012llX\n", macaddr &0xffffffffff);
+fprintf(fhout, "%012llX\n", macaddr &0xffffffffff);
+
+nici = macaddr &0xffffff;
+fprintf(fhout, "SPN3983%06X\n", nici);
 
 nici = ~macaddr &0xffffff;
 fprintf(fhout, "wlan%06x\n", nici);
+
 nici = ~macaddr &0xffffffff;
 fprintf(fhout, "%08x\n", nici);
+
 nici = (~macaddr >> 8) &0xffffffff;
 fprintf(fhout, "%08x\n", nici);
+
+for (c = 0x01; c < 0x10; c ++)
+	{
+	nici = ~(macaddr -c) &0xffffff;
+	fprintf(fhout, "wlan%06x\n", nici);
+
+	nici = ~(macaddr -c) &0xffffffff;
+	fprintf(fhout, "%08x\n", nici);
+
+	nici = ((~macaddr -c) >> 8) &0xffffffff;
+	fprintf(fhout, "%08x\n", nici);
+	}
 
 me = macaddr &0xffffff;
 fprintf(fhout, "05%6d\n", me);
 oui = macaddr &0xffffff000000L;
 nic = (macaddr -0x7f) &0xffffffL;
 for(c = 0; c <= 0xff; c++) writebssid(fhout, oui +((nic +c) &0xffffffL));
+if(oui == 0xccb171000000L)
+	{
+	for(c = 0; c <= 0xff; c++) fprintf(fhout, "CCB071%06llX\n", ((nic +c) &0xffffffL));
+	}
 swap = (nic >> 8) & 0xffff;
 	{
 	swap = (swap & 0xf000) >> 12 | (swap & 0x0f00) >> 4 | (swap & 0x00f0) << 4 | (swap & 0x000f) << 12;
@@ -2383,23 +2484,22 @@ return;
 /*===========================================================================*/
 static void processadditionals(FILE *fhout)
 {
-if(netgearflag == true) keywritenetgear(fhout);
-if(spectrumflag == true) keywritespectrum(fhout);
-if(digit10flag == true) keywritedigit10(fhout);
-if(phomeflag == true) keywritephome(fhout);
-if(tendaflag == true)
-	{
-	keywritetenda1(fhout);
-	keywritetenda2(fhout);
-	}
-if(eeflag == true) keywriteee(fhout);
-if(alticeoptimumflag == true) keywritealticeoptimum(fhout);
-if(weakpassflag == true) keywriteweakpass(fhout);
-if(eudateflag == true) keywriteeudate(fhout);
-if(usdateflag == true) keywriteusdate(fhout);
 if((eudateflag == true) || (usdateflag == true)) keywriteyearyear(fhout);
-if(wpskeysflag == true) writewpsall(fhout);
+if(alticeoptimumflag == true) keywritealticeoptimum(fhout);
+if(asusflag == true) keywriteasus(fhout);
+if(digit10flag == true) keywritedigit10(fhout);
+if(eeflag == true) keywriteee(fhout, false);
+if(eeupperflag == true) keywriteee(fhout, true);
 if(egnflag == true) keywriteegn(fhout);
+if(eudateflag == true) keywriteeudate(fhout);
+if(netgearflag == true) keywritenetgear(fhout);
+if(phomeflag == true) keywritephome(fhout);
+if(simpleflag == true) keywritesimple(fhout);
+if(spectrumflag == true) keywritespectrum(fhout);
+if(tendaflag == true) keywritetenda(fhout);
+if(usdateflag == true) keywriteusdate(fhout);
+if(weakpassflag == true) keywriteweakpass(fhout);
+if(wpskeysflag == true) writewpsall(fhout);
 return;
 }
 /*===========================================================================*/
@@ -2411,7 +2511,7 @@ static apessidl_t *zeiger;
 if(essidlen > ESSID_LEN_MAX) return;
 if(apessidliste == NULL)
 	{
-	apessidliste = malloc(APESSIDLIST_SIZE);
+	apessidliste = (apessidl_t*)malloc(APESSIDLIST_SIZE);
 	if(apessidliste == NULL)
 		{
 		fprintf(stderr, "failed to allocate memory\n");
@@ -2426,7 +2526,7 @@ if(apessidliste == NULL)
 	}
 zeiger = apessidliste +apessidcount -1;
 if((zeiger->macaddr == macaddr) && (zeiger->essidlen == essidlen) && (memcmp(zeiger->essid, essid, essidlen) == 0)) return;
-zeiger = realloc(apessidliste, (apessidcount +1) *APESSIDLIST_SIZE);
+zeiger = (apessidl_t*)realloc(apessidliste, (apessidcount +1) *APESSIDLIST_SIZE);
 if(zeiger == NULL)
 	{
 	fprintf(stderr, "failed to allocate memory\n");
@@ -2442,45 +2542,11 @@ apessidcount++;
 return;
 }
 /*===========================================================================*/
-/*===========================================================================*/
-static size_t chop(char *buffer, size_t len)
-{
-static char *ptr;
-
-ptr = buffer +len -1;
-while(len)
-	{
-	if (*ptr != '\n') break;
-	*ptr-- = 0;
-	len--;
-	}
-while(len)
-	{
-	if (*ptr != '\r') break;
-	*ptr-- = 0;
-	len--;
-	}
-return len;
-}
-/*---------------------------------------------------------------------------*/
-static int fgetline(FILE *inputstream, size_t size, char *buffer)
-{
-static size_t len;
-static char *buffptr;
-
-if(feof(inputstream)) return -1;
-buffptr = fgets (buffer, size, inputstream);
-if(buffptr == NULL) return -1;
-len = strlen(buffptr);
-len = chop(buffptr, len);
-return len;
-}
-/*===========================================================================*/
 static void readpmkidfile(char *pmkidname)
 {
 static int len;
 static int aktread = 1;
-static int essidlen;
+static ssize_t essidlen;
 static char *macaddrstop = NULL;
 static unsigned long long int macaddr;
 static FILE *fh_file;
@@ -2523,7 +2589,7 @@ while(1)
 		aktread++;
 		continue;
 		}
-	if(hex2bin(&linein[59], essid, essidlen/2) == true) addapessid(macaddr, essidlen/2, essid);
+	if(hex2bin(&linein[59], essid, essidlen/2) != -1) addapessid(macaddr, essidlen/2, essid);
 	aktread++;
 	}
 fclose(fh_file);
@@ -2534,7 +2600,7 @@ static void readpmkideapolfile(char *pmkideapolname)
 {
 static int len;
 static int aktread = 1;
-static int essidlen;
+static ssize_t essidlen;
 static char *macaddrstop = NULL;
 static char *essidstop = NULL;
 static unsigned long long int macaddr;
@@ -2593,7 +2659,7 @@ while(1)
 		aktread++;
 		continue;
 		}
-	if(hex2bin(&linein[66], essid, essidlen/2) == true) addapessid(macaddr, essidlen/2, essid);
+	if(hex2bin(&linein[66], essid, essidlen/2) != -1) addapessid(macaddr, essidlen/2, essid);
 	aktread++;
 	}
 fclose(fh_file);
@@ -2658,7 +2724,7 @@ while(1)
 		}
 
 	macp = (essidlen *2) +10;
-	while((macp < essidlen) || (linein[macp] != ':')) 
+	while((macp < essidlen) || (linein[macp] != ':'))
 		{
 		macp++;
 		}
@@ -2696,7 +2762,7 @@ static uint8_t hcxdata[HCCAPX_SIZE];
 
 if(stat(hccapxname, &statinfo) != 0)
 	{
-	fprintf(stderr, "can't stat %s\n", hccapxname); 
+	fprintf(stderr, "can't stat %s\n", hccapxname);
 	return;
 	}
 if((statinfo.st_size %HCCAPX_SIZE) != 0)
@@ -2731,7 +2797,7 @@ return;
 static void readcommandline(char *macapname, char *essidname)
 {
 static int essidlen = 0;
-static int essidlenuh = 0;
+static ssize_t essidlenuh = 0;
 static char *macaddrstop = NULL;
 static unsigned long long int macaddr = 0xffffffffffffL;
 static uint8_t essid[ESSID_LEN_MAX];
@@ -2742,13 +2808,13 @@ if(macapname != NULL)
 	if((macaddrstop -macapname) != 12) fprintf(stderr, "invalid MAC specified\n");
 	}
 memset(&essid, 0, ESSID_LEN_MAX);
-essidlen = strlen(essidname);
 if(essidname != NULL)
 	{
+	essidlen = strlen(essidname);
 	essidlenuh = ishexify(essidname);
 	if((essidlenuh > 0) && (essidlenuh <= ESSID_LEN_MAX))
 		{
-		if(hex2bin(&essidname[5], essid, essidlenuh) == true) addapessid(macaddr, essidlenuh, essid);
+		if(hex2bin(&essidname[5], essid, essidlenuh) != -1) addapessid(macaddr, essidlenuh, essid);
 		return;
 		}
 	memset(&essid, 0, ESSID_LEN_MAX);
@@ -2788,21 +2854,27 @@ fprintf(stdout, "%s %s (C) %s ZeroBeat\n"
 	"\n"
 	"--maconly           : print only candidates based on ACCESS POINT MAC\n"
 	"--noessidcombination: exclude ESSID combinations\n"
-	"--netgear           : include weak NETGEAR / ORBI / NTGR_VMB / ARLO_VMB candidates\n"
+	"--netgear           : include weak NETGEAR / ORBI / NTGR_VMB / ARLO_VMB / FoxtelHub candidates\n"
 	"--spectrum          : include weak MySpectrumWiFi / SpectrumSetup / MyCharterWiFi candidates\n"
-	"                      list will be > 1.7GB\n"
+	"                      list will be > 2.2GB\n"
 	"--digit10           : include weak 10 digit candidates (INFINITUM, ALHN, INEA, VodafoneNet, VIVACOM)\n"
 	"                      list will be > 1GB\n"
-	"--phome             : include weak PEGATRON HOME candidates\n"
-	"--tenda             : include weak TENDA candidates\n"
-	"--ee                : include weak EE BrightBox candidates\n"
-	"                      list will be > 3GB\n"
-	"--alticeoptimum     : include weak Altice/Optimum candidates (MyAltice)\n"
+	"--phome             : include weak PEGATRON / Vantiva candidates (CBCI, HOME, [SP/XF]SETUP)\n"
+	"                      list will be > 2.9GB\n"
+	"--tenda             : include weak Tenda / NOVA / NOVE / BrosTrend candidates\n"
+	"--ee                : include weak 5GHz-EE / BrightBox / EE / EE-BrightBox candidates\n"
+	"                      list will be > 1.3GB\n"
+	"--eeupper           : include weak EE-Hub candidates\n"
+	"                      list will be > 3.8GB\n"
+	"--alticeoptimum     : include weak Altice/Optimum candidates (MyAltice, MyOptimum)\n"
+	"                      list will be > 4.6GB\n"
+	"--asus              : include weak ASUS RT-AC candidates (ASUS_XX, RT-AC)\n"
 	"--weakpass          : include weak password candidates\n"
 	"--eudate            : include complete european dates\n"
 	"--usdate            : include complete american dates\n"
 	"--wpskeys           : include complete WPS keys\n"
 	"--egn               : include Bulgarian EGN\n"
+	"--simple            : include simple pattern\n"
 	"--help              : show this help\n"
 	"--version           : show version\n"
 	"\n"
@@ -2835,7 +2907,7 @@ static char *pskname = NULL;
 
 airtelflag = false;
 alticeoptimumflag = false;
-spectrumflag = false;
+asusflag = false;
 digit10flag = false;
 easyboxflag = false;
 eeflag = false;
@@ -2843,10 +2915,12 @@ egnflag = false;
 eudateflag = false;
 hb5flag = false;
 maconlyflag = false;
-noessidcombinationflag = false;
 netgearflag = false;
+noessidcombinationflag = false;
 phomeflag = false;
 podaflag = false;
+simpleflag = false;
+spectrumflag = false;
 tendaflag = false;
 ukrtelecomflag = false;
 usdateflag = false;
@@ -2857,20 +2931,23 @@ znidflag = false;
 static const char *short_options = "c:i:j:z:o:e:b:o:hv";
 static const struct option long_options[] =
 {
-	{"maconly",			no_argument,		NULL,	HCXD_MACONLY},
-	{"noessidcombination",		no_argument,		NULL,	HCXD_NOESSIDCOMBINATION},
-	{"netgear",			no_argument,		NULL,	HCXD_NETGEAR},
-	{"spectrum",			no_argument,		NULL,	HCXD_SPECTRUM},
+	{"alticeoptimum",		no_argument,		NULL,	HCXD_ALTICEOPTIMUM},
+	{"asus",			no_argument,		NULL,	HCXD_ASUS},
 	{"digit10",			no_argument,		NULL,	HCXD_DIGIT10},
-	{"phome",			no_argument,		NULL,	HCXD_PHOME},
-	{"tenda",			no_argument,		NULL,	HCXD_TENDA},
 	{"ee",				no_argument,		NULL,	HCXD_EE},
-	{"alticeoptimum",				no_argument,		NULL,	HCXD_ALTICEOPTIMUM},
-	{"weakpass",			no_argument,		NULL,	HCXD_WEAKPASS},
-	{"eudate",			no_argument,		NULL,	HCXD_EUDATE},
-	{"usdate",			no_argument,		NULL,	HCXD_USDATE},
-	{"wpskeys",			no_argument,		NULL,	HCXD_WPSKEYS},
+	{"eeupper",			no_argument,		NULL,	HCXD_EEUPPER},
 	{"egn",				no_argument,		NULL,	HCXD_EGN},
+	{"eudate",			no_argument,		NULL,	HCXD_EUDATE},
+	{"maconly",			no_argument,		NULL,	HCXD_MACONLY},
+	{"netgear",			no_argument,		NULL,	HCXD_NETGEAR},
+	{"noessidcombination",		no_argument,		NULL,	HCXD_NOESSIDCOMBINATION},
+	{"phome",			no_argument,		NULL,	HCXD_PHOME},
+	{"simple",			no_argument,		NULL,	HCXD_SIMPLE},
+	{"spectrum",			no_argument,		NULL,	HCXD_SPECTRUM},
+	{"tenda",			no_argument,		NULL,	HCXD_TENDA},
+	{"usdate",			no_argument,		NULL,	HCXD_USDATE},
+	{"weakpass",			no_argument,		NULL,	HCXD_WEAKPASS},
+	{"wpskeys",			no_argument,		NULL,	HCXD_WPSKEYS},
 	{"version",			no_argument,		NULL,	HCXD_VERSION},
 	{"help",			no_argument,		NULL,	HCXD_HELP},
 	{NULL,				0,			NULL,	0}
@@ -2916,8 +2993,16 @@ while((auswahl = getopt_long (argc, argv, short_options, long_options, &index)) 
 		eeflag = true;
 		break;
 
+		case HCXD_EEUPPER:
+		eeupperflag = true;
+		break;
+
 		case HCXD_ALTICEOPTIMUM:
 		alticeoptimumflag = true;
+		break;
+
+		case HCXD_ASUS:
+		asusflag = true;
 		break;
 
 		case HCXD_WEAKPASS:
@@ -2938,6 +3023,10 @@ while((auswahl = getopt_long (argc, argv, short_options, long_options, &index)) 
 
 		case HCXD_EGN:
 		egnflag = true;
+		break;
+
+		case HCXD_SIMPLE:
+		simpleflag = true;
 		break;
 
 		case HCXD_HELP:
@@ -3050,7 +3139,6 @@ else
 		processadditionals(stdout);
 		}
 	}
-
 
 if(pskname != NULL)
 	{

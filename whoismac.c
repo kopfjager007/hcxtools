@@ -1,91 +1,68 @@
 #define _GNU_SOURCE
 #include <ctype.h>
-#include <dirent.h>
-#include <fcntl.h>
-#include <ftw.h>
 #include <libgen.h>
 #include <pwd.h>
-#include <stdarg.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
 #include <string.h>
 #include <sys/stat.h>
-#include <sys/types.h>
 #include <unistd.h>
-#include <utime.h>
+
 #include <curl/curl.h>
 
 #include "include/strings.c"
+#include "include/fileops.c"
 
-#define LINEBUFFER 256
+#define LINEBUFFER_MAX	256
+#define OUIBUFFER_MAX	8192
+
+static const char *ouiurl = "https://standards-oui.ieee.org/oui/oui.txt";
 
 /*===========================================================================*/
 static bool downloadoui(char *ouiname)
 {
+static size_t bread;
 static CURLcode ret;
 static CURL *hnd;
+static FILE *fhoui;
+static FILE *fhouitmp;
+static char ouibuff[OUIBUFFER_MAX];
 
-static FILE* fhoui;
-
-fprintf(stdout, "start downloading oui from http://standards-oui.ieee.org to: %s\n", ouiname);
-
-if((fhoui = fopen(ouiname, "w")) == NULL)
+fprintf(stdout, "start downloading oui from https://standards-oui.ieee.org to: %s\n", ouiname);
+if((fhouitmp = tmpfile()) == NULL)
 	{
-	fprintf(stderr, "error creating file %s", ouiname);
-	exit(EXIT_FAILURE);
+	fprintf(stderr, "failed to create temporary download file\n");
+	return false;
 	}
-
 hnd = curl_easy_init ();
-curl_easy_setopt(hnd, CURLOPT_URL, "http://standards-oui.ieee.org/oui/oui.txt");
+curl_easy_setopt(hnd, CURLOPT_URL, ouiurl);
 curl_easy_setopt(hnd, CURLOPT_NOPROGRESS, 1L);
 curl_easy_setopt(hnd, CURLOPT_MAXREDIRS, 5L);
-curl_easy_setopt(hnd, CURLOPT_WRITEDATA, fhoui);
+curl_easy_setopt(hnd, CURLOPT_WRITEDATA, fhouitmp);
 curl_easy_setopt(hnd, CURLOPT_NOPROGRESS, 0L);
 ret = curl_easy_perform(hnd);
 curl_easy_cleanup(hnd);
-fclose(fhoui);
 if(ret != 0)
 	{
-	fprintf(stderr, "download not successful\n");
+	fprintf(stderr, "\ndownload not successful\n");
 	exit(EXIT_FAILURE);
 	}
-
-fprintf(stdout, "download finished\n");
+rewind(fhouitmp);
+if((fhoui = fopen(ouiname, "w")) == NULL)
+	{
+	fprintf(stderr, "\nerror creating file %s\n", ouiname);
+	exit(EXIT_FAILURE);
+	}
+while (!feof(fhouitmp))
+	{
+	bread = fread(ouibuff, 1, sizeof(ouibuff), fhouitmp);
+	if(bread > 0) fwrite(ouibuff, 1, bread, fhoui);
+	}
+fclose(fhoui);
+fprintf(stdout, "\ndownload finished\n");
 return true;
-}
-/*===========================================================================*/
-static size_t chop(char *buffer,  size_t len)
-{
-static char *ptr;
-
-ptr = buffer +len -1;
-while (len) {
-	if (*ptr != '\n') break;
-	*ptr-- = 0;
-	len--;
-	}
-
-while (len) {
-	if (*ptr != '\r') break;
-	*ptr-- = 0;
-	len--;
-	}
-return len;
-}
-/*---------------------------------------------------------------------------*/
-static int fgetline(FILE *inputstream, size_t size, char *buffer)
-{
-if (feof(inputstream)) return -1;
-		char *buffptr = fgets (buffer, size, inputstream);
-
-	if (buffptr == NULL) return -1;
-
-	size_t len = strlen(buffptr);
-	len = chop(buffptr, len);
-
-return len;
 }
 /*===========================================================================*/
 static void getessidinfo(char *essidname)
@@ -114,7 +91,7 @@ for(p = 0; p < l; p++)
 	}
 
 memset(&essidbuffer, 0, 66);
-if(hex2bin(essidname, essidbuffer, l /2) == false)
+if(hex2bin(essidname, essidbuffer, l /2) == -1)
 	{
 	fprintf(stderr, "not a valid ESSID hex string\n");
 	return;
@@ -150,7 +127,7 @@ static unsigned long long int ouiap;
 static unsigned long long int ouista;
 static unsigned long long int vendoroui;
 
-static char linein[LINEBUFFER];
+static char linein[LINEBUFFER_MAX];
 static uint8_t essidbuffer[66];
 static char vendorapname[256];
 static char vendorstaname[256];
@@ -178,7 +155,7 @@ if((l%2 != 0) || (l > 64))
 	return;
 	}
 memset(&essidbuffer, 0, 66);
-if(hex2bin(essidptr, essidbuffer, l /2) == false)
+if(hex2bin(essidptr, essidbuffer, l /2) == -1)
 	{
 	fprintf(stderr, "wrong ESSID %s\n", essidptr);
 	return;
@@ -193,7 +170,7 @@ if ((fhoui = fopen(ouiname, "r")) == NULL)
 strncpy(vendorapname, "unknown", 8);
 strncpy(vendorstaname, "unknown", 8);
 
-while((len = fgetline(fhoui, LINEBUFFER, linein)) != -1)
+while((len = fgetline(fhoui, LINEBUFFER_MAX, linein)) != -1)
 	{
 	if (len < 10)
 		continue;
@@ -252,7 +229,7 @@ static unsigned long long int ouiap;
 static unsigned long long int ouista;
 static unsigned long long int vendoroui;
 
-static char linein[LINEBUFFER];
+static char linein[LINEBUFFER_MAX];
 static uint8_t essidbuffer[72];
 static char vendorapname[256];
 static char vendorstaname[256];
@@ -293,7 +270,7 @@ if ((fhoui = fopen(ouiname, "r")) == NULL)
 strncpy(vendorapname, "unknown", 8);
 strncpy(vendorstaname, "unknown", 8);
 
-while((len = fgetline(fhoui, LINEBUFFER, linein)) != -1)
+while((len = fgetline(fhoui, LINEBUFFER_MAX, linein)) != -1)
 	{
 	if (len < 10)
 		continue;
@@ -335,7 +312,7 @@ static int len;
 static FILE* fhoui;
 static char *vendorptr;
 static unsigned long long int vendoroui;
-static char linein[LINEBUFFER];
+static char linein[LINEBUFFER_MAX];
 static char vendorapname[256];
 #ifdef BIG_ENDIAN_HOST
 int lsb = oui & 0xf;
@@ -350,7 +327,7 @@ if ((fhoui = fopen(ouiname, "r")) == NULL)
 	}
 
 strncpy(vendorapname, "unknown", 8);
-while((len = fgetline(fhoui, LINEBUFFER, linein)) != -1)
+while((len = fgetline(fhoui, LINEBUFFER_MAX, linein)) != -1)
 	{
 	if (len < 10)
 		continue;
@@ -386,7 +363,7 @@ static FILE* fhoui;
 static char *vendorptr;
 static unsigned long long int vendoroui;
 
-char linein[LINEBUFFER];
+char linein[LINEBUFFER_MAX];
 
 
 if ((fhoui = fopen(ouiname, "r")) == NULL)
@@ -395,7 +372,7 @@ if ((fhoui = fopen(ouiname, "r")) == NULL)
 	exit (EXIT_FAILURE);
 	}
 
-while((len = fgetline(fhoui, LINEBUFFER, linein)) != -1)
+while((len = fgetline(fhoui, LINEBUFFER_MAX, linein)) != -1)
 	{
 	if (len < 10)
 		continue;
@@ -421,7 +398,7 @@ fprintf(stdout, "%s %s (C) %s ZeroBeat\n"
 	"usage: %s <options>\n"
 	"\n"
 	"options:\n"
-	"-d            : download http://standards-oui.ieee.org/oui/oui.txt\n"
+	"-d            : download %s\n"
 	"              : and save to ~/.hcxtools/oui.txt\n"
 	"              : internet connection required\n"
 	"-m <mac>      : mac (six bytes of mac addr) or \n"
@@ -430,10 +407,9 @@ fprintf(stdout, "%s %s (C) %s ZeroBeat\n"
 	"-P <hashline> : input EAPOL hashline from potfile (hashcat <= 5.1.0)\n"
 	"-e <ESSID>    : input ESSID\n"
 	"-x <xdigit>   : input ESSID in hex\n"
-	"-e <ESSID>    : input ESSID\n"
 	"-v <vendor>   : vendor name\n"
 	"-h            : this help screen\n"
-	"\n", eigenname, VERSION_TAG, VERSION_YEAR, eigenname);
+	"\n", eigenname, VERSION_TAG, VERSION_YEAR, eigenname, ouiurl);
 exit(EXIT_SUCCESS);
 }
 /*===========================================================================*/
@@ -456,9 +432,9 @@ static char *essidname = NULL;
 static char *hash16800line = NULL;
 static char *hash2500line = NULL;
 static char *ouiname = NULL;
-static char *confdirname = ".hcxtools";
-static char *ouinameuser = ".hcxtools/oui.txt";
-static char *ouinamesystemwide = "/usr/share/ieee-data/oui.txt";
+static char confdirname[] = ".hcxtools";
+static char ouinameuser[] = ".hcxtools/oui.txt";
+static char ouinamesystemwide[] = "/usr/share/ieee-data/oui.txt";
 
 static char pmkidtype[] = {"WPA*01*" };
 static char eapoltype[] = {"WPA*02*" };
@@ -608,16 +584,16 @@ if(ouiname == NULL)
 	{
 	fprintf(stderr, "failed read oui.txt\n"
 			"use download option -d to download it\n"
-			"or download file http://standards-oui.ieee.org/oui/oui.txt\n"
-			"and save it to ~/.hcxtools/oui.txt\n");
+			"or download file %s\n"
+			"and save it to ~/.hcxtools/oui.txt\n", ouiurl);
 	exit(EXIT_FAILURE);
 	}
 if(stat(ouiname, &statinfo) < 0)
 	{
 	fprintf(stderr, "failed read oui.txt\n"
 			"use download option -d to download it\n"
-			"or download file http://standards-oui.ieee.org/oui/oui.txt\n"
-			"and save it to ~/.hcxtools/oui.txt\n");
+			"or download file %s\n"
+			"and save it to ~/.hcxtools/oui.txt\n", ouiurl);
 	exit(EXIT_FAILURE);
 	}
 if(mode == 'm')

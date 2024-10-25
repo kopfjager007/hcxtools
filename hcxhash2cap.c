@@ -1,37 +1,38 @@
 #define _GNU_SOURCE
+#include <ctype.h>
 #include <getopt.h>
-#include <stdarg.h>
+#include <libgen.h>
+#include <limits.h>
+#include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
 #include <string.h>
-#include <ctype.h>
-#include <unistd.h>
-#include <time.h>
-#include <limits.h>
-#include <netinet/in.h>
-#include <sys/time.h>
-#include <sys/types.h>
 #include <sys/stat.h>
-#if defined (__APPLE__) || defined(__OpenBSD__)
-#include <libgen.h>
+#include <sys/time.h>
+#include <time.h>
+#include <unistd.h>
+
+#ifdef _WIN32
+#include <winsock2.h>
 #else
-#include <stdio_ext.h>
+#include <arpa/inet.h>
 #endif
+
 #include "include/hcxhash2cap.h"
 #include "include/hashcatops.h"
 #include "include/pcap.c"
 #include "include/ieee80211.c"
 #include "include/strings.c"
 #include "include/byteops.c"
+#include "include/fileops.c"
 
 #define ARCH_INDEX(x)	((unsigned int)(unsigned char)(x))
 
 /*===========================================================================*/
 /* global var */
 
-struct timeval tv;
+static struct timeval tv;
 static uint64_t timestamp;
 
 static int mybeaconsequence;
@@ -49,7 +50,7 @@ static unsigned long long int johnwritten;
 static unsigned long long int johnskipped;
 
 /*===========================================================================*/
-static void globalinit()
+static void globalinit(void)
 {
 
 srand(time(NULL));
@@ -489,42 +490,6 @@ if(write(fd_cap, packetout, PCAPREC_SIZE +MAC_SIZE_NORM +CAPABILITIESAP_SIZE +2 
 return;
 }
 /*===========================================================================*/
-static size_t chop(char *buffer, size_t len)
-{
-static char *ptr;
-
-ptr = buffer +len -1;
-while(len)
-	{
-	if (*ptr != '\n')
-		break;
-	*ptr-- = 0;
-	len--;
-	}
-while(len)
-	{
-	if (*ptr != '\r')
-		break;
-	*ptr-- = 0;
-	len--;
-	}
-return len;
-}
-/*---------------------------------------------------------------------------*/
-static int fgetline(FILE *inputstream, size_t size, char *buffer)
-{
-static size_t len;
-static char *buffptr;
-
-if(feof(inputstream))
-	return -1;
-buffptr = fgets (buffer, size, inputstream);
-if(buffptr == NULL)
-	return -1;
-len = strlen(buffptr);
-len = chop(buffptr, len);
-return len;
-}
 static uint16_t getfield(char *lineptr, size_t bufflen, uint8_t *buff)
 {
 static size_t p;
@@ -549,7 +514,7 @@ while((lineptr[p] != '*') && (lineptr[p] != 0) && (p /2 <= bufflen))
 	{
 	if(! isxdigit((unsigned char)lineptr[p +0])) return 0;
 	if(! isxdigit((unsigned char)lineptr[p +1])) return 0;
-	if((lineptr[p +1] == '*') && (lineptr[p +1] == 0)) return 0;
+	if((lineptr[p +1] == '*') || (lineptr[p +1] == 0)) return 0;
 	idx0 = ((uint8_t)lineptr[p +0] &0x1F) ^0x10;
 	idx1 = ((uint8_t)lineptr[p +1] &0x1F) ^0x10;
 	buff[p /2] = (uint8_t)(hashmap[idx0] <<4) | hashmap[idx1];
@@ -841,25 +806,25 @@ while(1)
 		pmkcapskipped++;
 		continue;
 		}
-	if(hex2bin(&linein[0], pmkid, 16) != true)
+	if(hex2bin(&linein[0], pmkid, 16) == -1)
 		{
 		fprintf(stderr, "reading hash line %d failed: %s\n", aktread, linein);
 		pmkcapskipped++;
 		continue;
 		}
-	if(hex2bin(&linein[33], macap, 6) != true)
+	if(hex2bin(&linein[33], macap, 6) == -1)
 		{
 		fprintf(stderr, "reading hash line %d failed: %s\n", aktread, linein);
 		pmkcapskipped++;
 		continue;
 		}
-	if(hex2bin(&linein[46], macsta, 6) != true)
+	if(hex2bin(&linein[46], macsta, 6) == -1)
 		{
 		fprintf(stderr, "reading hash line %d failed: %s\n", aktread, linein);
 		pmkcapskipped++;
 		continue;
 		}
-	if(hex2bin(&linein[59], essid, essidlen/2) != true)
+	if(hex2bin(&linein[59], essid, essidlen/2) == -1)
 		{
 		fprintf(stderr, "reading hash line %d failed: %s\n", aktread, linein);
 		pmkcapskipped++;
@@ -1296,7 +1261,7 @@ static uint8_t keyver;
 static uint64_t rc;
 
 
-static const char itoa64[64] = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+static const char itoa64[65] = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 static char singlecapname[PATH_MAX +2];
 static char linein[JOHN_LINE_LEN];
@@ -1562,6 +1527,10 @@ fprintf(stdout, "%s %s (C) %s ZeroBeat\n"
 	"--john=<file>        : input John the Ripper WPAPSK hash file\n"
 	"--help               : show this help\n"
 	"--version            : show version\n"
+	"\n"
+	"Important notice:\n"
+	"Conversion from a dump file to a hash file is not loss less.\n"
+	"Hash files that contain EAPOL M3 MESSAGEs can't be converted back to a cap file.\n"
 	"\n", eigenname, VERSION_TAG, VERSION_YEAR, eigenname);
 exit(EXIT_SUCCESS);
 }

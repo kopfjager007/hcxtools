@@ -1,6 +1,6 @@
 PRODUCTION		:= 0
-PRODUCTION_VERSION	:= 6.2.6
-PRODUCTION_YEAR		:= 2022
+PRODUCTION_VERSION	:= 6.3.4
+PRODUCTION_YEAR		:= 2024
 
 ifeq ($(PRODUCTION),1)
 VERSION_TAG		:= $(PRODUCTION_VERSION)
@@ -15,7 +15,7 @@ BINDIR		= $(DESTDIR)$(PREFIX)/bin
 HOSTOS		:= $(shell uname -s)
 
 CC		?= gcc
-CFLAGS		?= -O3 -Wall -Wextra
+CFLAGS		?= -O3 -Wall -Wextra -Wpedantic
 CFLAGS		+= -std=gnu99
 DEFS		= -DVERSION_TAG=\"$(VERSION_TAG)\" -DVERSION_YEAR=\"$(VERSION_YEAR)\"
 DEFS		+= -DWANTZLIB
@@ -57,15 +57,6 @@ wlancap2wpasec_cflags=$(OPENSSL_CFLAGS) $(CURL_CFLAGS)
 TOOLS+=whoismac
 whoismac_libs=$(OPENSSL_LIBS) $(CURL_LIBS)
 whoismac_cflags=$(OPENSSL_CFLAGS) $(CURL_CFLAGS)
-
-TOOLS+=hcxpmkidtool
-TOOLS+=hcxhashcattool
-hcxhashcattool_libs=-lpthread $(OPENSSL_LIBS)
-hcxhashcattool_cflags=$(OPENSSL_CFLAGS)
-hcxpmkidtool_libs=-lpthread $(OPENSSL_LIBS)
-hcxpmkidtool_cflags=$(OPENSSL_CFLAGS)
-TOOLS+=hcxmactool
-TOOLS+=hcxessidtool
 
 .PHONY: all build install clean uninstall
 

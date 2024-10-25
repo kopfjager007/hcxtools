@@ -1,36 +1,35 @@
 #define _GNU_SOURCE
 #include <ctype.h>
 #include <errno.h>
-#include <stdarg.h>
-#include <stdint.h>
+#include <fcntl.h>
+#include <getopt.h>
+#include <inttypes.h>
+#include <libgen.h>
+#include <limits.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdbool.h>
 #include <string.h>
-#include <getopt.h>
-#include <time.h>
-#include <limits.h>
-#include <inttypes.h>
-#include <fcntl.h>
-#include <unistd.h>
-#include <netinet/in.h>
-#include <sys/time.h>
-#include <sys/types.h>
 #include <sys/stat.h>
-#include <openssl/conf.h>
-#include <openssl/err.h>
-#include <openssl/crypto.h>
-#include <openssl/evp.h>
-#include <openssl/ssl.h>
+#include <sys/time.h>
+#include <time.h>
+#include <unistd.h>
 #if defined (__APPLE__) || defined(__OpenBSD__)
-#include <libgen.h>
 #include <sys/socket.h>
+#endif
+
+#ifdef _WIN32
+#include <winsock2.h>
 #else
-#include <stdio_ext.h>
+#include <arpa/inet.h>
 #endif
-#ifdef __linux__
-#include <linux/limits.h>
-#endif
+
+#include <openssl/core.h>
+#include <openssl/crypto.h>
+#include <openssl/err.h>
+#include <openssl/evp.h>
+#include <openssl/params.h>
+#include <openssl/types.h>
 
 #if __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
 #define BIG_ENDIAN_HOST
@@ -43,19 +42,22 @@
 #include "include/fileops.c"
 #include "include/hashops.c"
 #include "include/pcap.c"
+#ifdef WANTZLIB
 #include "include/gzops.c"
+#endif
+
 /*===========================================================================*/
 struct hccap_s
 {
-  char essid[36];
-  unsigned char ap[6];
-  unsigned char client[6];
-  unsigned char snonce[32];
-  unsigned char anonce[32];
-  unsigned char eapol[256];
-  int eapol_size;
-  int keyver;
-  unsigned char keymic[16];
+ char essid[36];
+ unsigned char ap[6];
+ unsigned char client[6];
+ unsigned char snonce[32];
+ unsigned char anonce[32];
+ unsigned char eapol[256];
+ int eapol_size;
+ int keyver;
+ unsigned char keymic[16];
 };
 typedef struct hccap_s hccap_t;
 #define	HCCAP_SIZE (sizeof(hccap_t))
@@ -83,7 +85,16 @@ typedef struct hccapx_s hccapx_t;
 /*===========================================================================*/
 /*===========================================================================*/
 /* global var */
+static EVP_MAC *hmac;
+static EVP_MAC *cmac;
+static EVP_MAC_CTX *ctxhmac;
+static EVP_MAC_CTX *ctxcmac;
+static OSSL_PARAM paramsmd5[3];
+static OSSL_PARAM paramssha1[3];
+static OSSL_PARAM paramssha256[3];
+static OSSL_PARAM paramsaes128[3];
 
+static size_t magicblockcount;
 static maclist_t *aplist, *aplistptr;
 static messagelist_t *messagelist;
 static handshakelist_t *handshakelist, *handshakelistptr;
@@ -99,6 +110,7 @@ static tacacsplist_t *tacacsplist, *tacacsplistptr;
 static char *jtrbasenamedeprecated;
 
 static FILE *fh_pmkideapol;
+static FILE *fh_pmkideapolclient;
 static FILE *fh_eapmd5;
 static FILE *fh_eapmd5john;
 static FILE *fh_eapleap;
@@ -111,6 +123,7 @@ static FILE *fh_username;
 static FILE *fh_nmea;
 static FILE *fh_csv;
 static FILE *fh_raw_out;
+static FILE *fh_lts;
 static FILE *fh_log;
 static FILE *fh_pmkideapoljtrdeprecated;
 static FILE *fh_pmkiddeprecated;
@@ -129,9 +142,8 @@ static int fd_pcap;
 static int gzipstat;
 static int pcapngstat;
 static int capstat;
-static int pcapngstat;
 
-static int endianess;
+static int endianness;
 static uint16_t versionmajor;
 static uint16_t versionminor;
 
@@ -151,6 +163,8 @@ static long int pcapreaderrors;
 static long int skippedpacketcount;
 static long int zeroedtimestampcount;
 static long int fcsframecount;
+static long int fcsgoodframecount;
+static long int fcsbadframecount;
 static long int band24count;
 static long int band5count;
 static long int band6count;
@@ -169,7 +183,7 @@ static long int pagcount;
 static long int proberesponsecount;
 static long int proberesponsessidunsetcount;
 static long int proberesponsessidzeroedcount;
-static long int proberequestcount;
+static long int proberequestundirectedcount;
 static long int proberequestdirectedcount;
 static long int mgtreservedcount;
 static long int deauthenticationcount;
@@ -211,6 +225,8 @@ static long int protochaprespcount;
 static long int protochapsuccesscount;
 static long int protopapcount;
 static long int tacacspcount;
+static long int tacacsp2count;
+static long int tacacsp3count;
 static long int tacacspwrittencount;
 static long int wepenccount;
 static long int wpaenccount;
@@ -229,22 +245,29 @@ static long int eapexpandedcount;
 static long int eapidcount;
 static long int eapcodereqcount;
 static long int eapcoderespcount;
+static long int radiusrequestcount;
+static long int radiuschallengecount;
+static long int radiusacceptcount;
+static long int radiusrejectcount;
 static long int zeroedpmkidpskcount;
 static long int zeroedpmkidpmkcount;
 static long int zeroedeapolpskcount;
 static long int zeroedeapolpmkcount;
-static long int zeroedeapolpskcount;
 static long int pmkidcount;
 static long int pmkidbestcount;
 static long int pmkidroguecount;
 static long int pmkiduselesscount;
+static long int pmkidfaultycount;
+static long int pmkidakmcount;
 static long int pmkidwrittenhcount;
+static long int pmkidclientwrittenhcount;
 static long int pmkidwrittenjcountdeprecated;
 static long int pmkidwrittencountdeprecated;
 static long int eapolrc4count;
 static long int eapolrsncount;
 static long int eapolwpacount;
 static long int eapolmsgcount;
+static long int eapolrelayedcount;
 static long int eapolnccount;
 static long int eapolmsgerrorcount;
 static long int eapolmsgtimestamperrorcount;
@@ -255,13 +278,17 @@ static long int eapolm1kdv0count;
 static long int eapolm1ancount;
 static long int eapolm1errorcount;
 static long int eapolm2count;
+static long int eapolm2oversizedcount;
 static long int eapolm2kdv0count;
 static long int eapolm2ftpskcount;
 static long int eapolm2errorcount;
 static long int eapolm3count;
+static long int eapolm3oversizedcount;
 static long int eapolm3kdv0count;
 static long int eapolm3errorcount;
 static long int eapolm4count;
+static long int eapolm4oversizedcount;
+static long int eapolm4zeroedcount;
 static long int eapolm4kdv0count;
 static long int eapolm4errorcount;
 static long int eapolwrittencount;
@@ -298,6 +325,7 @@ static long int malformedcount;
 static uint64_t timestampstart;
 static uint64_t timestampmin;
 static uint64_t timestampmax;
+static uint64_t timestampdiff;
 static uint64_t eaptimegapmax;
 static uint64_t captimestampold;
 
@@ -309,10 +337,13 @@ static uint16_t frequency;
 
 static int nmealen;
 
+static bool addtimestampflag;
 static bool ignoreieflag;
 static bool donotcleanflag;
 static bool ancientdumpfileformat;
 static bool radiotappresent;
+static bool ieee80211flag;
+
 
 static const uint8_t fakenonce1[] =
 {
@@ -357,7 +388,7 @@ static inline void debugprint(int len, uint8_t *ptr)
 {
 static int p;
 
-fprintf(stdout, "\nRAW: "); 
+fprintf(stdout, "\nRAW: ");
 
 for(p = 0; p < len; p++)
 	{
@@ -368,7 +399,7 @@ return;
 }
 */
 /*===========================================================================*/
-static void closelists()
+static void closelists(void)
 {
 if(aplist != NULL) free(aplist);
 if(messagelist != NULL) free(messagelist);
@@ -381,23 +412,12 @@ if(eapleaphashlist != NULL) free(eapleaphashlist);
 if(eapmschapv2msglist != NULL) free(eapmschapv2msglist);
 if(eapmschapv2hashlist != NULL) free(eapmschapv2hashlist);
 if(tacacsplist != NULL) free(tacacsplist);
-
-EVP_cleanup();
-CRYPTO_cleanup_all_ex_data();
-ERR_free_strings();
 return;
 }
 /*===========================================================================*/
-static bool initlists()
+static bool initlists(void)
 {
-static unsigned long opensslversion;
 static const char nastring[] = { "N/A" };
-
-ERR_load_crypto_strings();
-OpenSSL_add_all_algorithms();
-opensslversion = OpenSSL_version_num();
-opensslversionmajor = (opensslversion & 0x10000000L) >> 28;
-opensslversionminor = (opensslversion & 0x01100000L) >> 20;
 
 maclistmax = MACLIST_MAX;
 if((aplist = (maclist_t*)calloc((maclistmax +1), MACLIST_SIZE)) == NULL) return false;
@@ -453,15 +473,19 @@ memcpy(&pcapngapplinfo, nastring, 3);
 memcpy(&pcapngoptioninfo, nastring, 3);
 memcpy(&pcapngweakcandidate, nastring, 3);
 
+ieee80211flag = false;
+
 radiotaperrorcount = 0;
 nmeacount = 0;
 nmeaerrorcount = 0;
-endianess = 0;
+endianness = 0;
 rawpacketcount = 0;
 pcapreaderrors = 0;
 skippedpacketcount = 0;
 zeroedtimestampcount = 0;
 fcsframecount = 0;
+fcsgoodframecount = 0;
+fcsbadframecount = 0;
 band24count = 0;
 band5count = 0;
 band6count = 0;
@@ -480,7 +504,7 @@ pagcount = 0;
 proberesponsecount = 0;
 proberesponsessidunsetcount = 0;
 proberesponsessidzeroedcount = 0;
-proberequestcount = 0;
+proberequestundirectedcount = 0;
 proberequestdirectedcount = 0;
 mgtreservedcount = 0;
 deauthenticationcount = 0;
@@ -521,6 +545,8 @@ protochaprespcount = 0;
 protochapsuccesscount = 0;
 protopapcount = 0;
 tacacspcount = 0;
+tacacsp2count = 0;
+tacacsp3count = 0;
 tacacspwrittencount = 0;
 wepenccount = 0;
 wpaenccount = 0;
@@ -539,6 +565,10 @@ eapexpandedcount = 0;
 eapidcount = 0;
 eapcodereqcount = 0;
 eapcoderespcount = 0;
+radiusrequestcount = 0;
+radiuschallengecount = 0;
+radiusacceptcount = 0;
+radiusrejectcount = 0;
 zeroedpmkidpskcount = 0;
 zeroedpmkidpmkcount = 0;
 zeroedeapolpskcount = 0;
@@ -547,7 +577,10 @@ pmkidcount = 0;
 pmkidbestcount = 0;
 pmkidroguecount = 0;
 pmkiduselesscount = 0;
+pmkidfaultycount = 0;
+pmkidakmcount = 0;
 pmkidwrittenhcount = 0;
+pmkidclientwrittenhcount = 0;
 eapolwrittenjcountdeprecated = 0;
 pmkidwrittenjcountdeprecated = 0;
 pmkidwrittencountdeprecated = 0;
@@ -555,6 +588,7 @@ eapolrc4count = 0;
 eapolrsncount = 0;
 eapolwpacount = 0;
 eapolmsgcount = 0;
+eapolrelayedcount = 0;
 eapolnccount = 0;
 eapolmsgerrorcount = 0;
 eapolmsgtimestamperrorcount = 0;
@@ -565,13 +599,17 @@ eapolm1kdv0count = 0;
 eapolm1ancount = 0;
 eapolm1errorcount = 0;
 eapolm2count = 0;
+eapolm2oversizedcount = 0;
 eapolm2kdv0count = 0;
 eapolm2ftpskcount = 0;
 eapolm2errorcount = 0;
 eapolm3count = 0;
+eapolm3oversizedcount = 0;
 eapolm3kdv0count = 0;
 eapolm3errorcount = 0;
 eapolm4count = 0;
+eapolm4oversizedcount = 0;
+eapolm4zeroedcount = 0;
 eapolm4kdv0count = 0;
 eapolm4errorcount = 0;
 eapolwrittencount = 0;
@@ -603,6 +641,7 @@ eaptimegapmax = 0;
 malformedcount = 0;
 timestampmin = 0;
 timestampmax = 0;
+timestampdiff = 0;
 timestampstart = 0;
 captimestampold = 0;
 
@@ -614,19 +653,21 @@ memset(&usedfrequency, 0, sizeof(usedfrequency));
 return true;
 }
 /*===========================================================================*/
-static void printcontentinfo()
+static void printcontentinfo(void)
 {
 static int c;
 static uint8_t i;
 static uint16_t p;
 
-if(nmeacount > 0)			fprintf(stdout, "NMEA sentence............................: %ld\n", nmeacount);
-if(nmeaerrorcount > 0)			fprintf(stdout, "NMEA sentence checksum errors............: %ld\n", nmeaerrorcount);
-if(endianess == 0)			fprintf(stdout, "endianess (capture system)...............: little endian\n");
-else					fprintf(stdout, "endianess (capture system)...............: big endian\n");
+if(nmeacount > 0)			fprintf(stdout, "NMEA PROTOCOL............................: %ld\n", nmeacount);
+if(nmeaerrorcount > 0)			fprintf(stdout, "NMEA PROTOCOL checksum errors............: %ld\n", nmeaerrorcount);
+if(endianness == 0)			fprintf(stdout, "endianness (capture system)..............: little endian\n");
+else					fprintf(stdout, "endianness (capture system)..............: big endian\n");
 if(rawpacketcount > 0)			fprintf(stdout, "packets inside...........................: %ld\n", rawpacketcount);
 if(skippedpacketcount > 0)		fprintf(stdout, "skipped packets..........................: %ld\n", skippedpacketcount);
-if(fcsframecount > 0)			fprintf(stdout, "frames with correct FCS..................: %ld\n", fcsframecount);
+if(fcsframecount > 0)			fprintf(stdout, "frames with FCS (radiotap)...............: %ld\n", fcsframecount);
+if(fcsgoodframecount > 0)		fprintf(stdout, "frames with correct FCS (crc)............: %ld\n", fcsgoodframecount);
+if(fcsbadframecount > 0)		fprintf(stdout, "frames with bad FCS (radiotap)...........: %ld\n", fcsbadframecount);
 if(band24count > 0)			fprintf(stdout, "packets received on 2.4 GHz..............: %ld\n", band24count);
 if(band5count > 0)			fprintf(stdout, "packets received on 5 GHz................: %ld\n", band5count);
 if(band6count > 0)			fprintf(stdout, "packets received on 6 GHz................: %ld\n", band6count);
@@ -652,7 +693,7 @@ if(beaconcount > 0)
 		}
 	if((beaconchannel[0] &GHZ5) == GHZ5)
 		{
-		fprintf(stdout, "BEACON on 5/6 GHz channel (from IE-TAG)..: ");
+		fprintf(stdout, "BEACON on 5/6 GHz channel (from IE_TAG)..: ");
 		for(i = 15; i < CHANNEL_MAX; i++)
 			{
 			if(beaconchannel[i] != 0) fprintf(stdout, "%d ", i);
@@ -668,7 +709,7 @@ if(beaconhcxcount > 0)			fprintf(stdout, "BEACON (hcxhash2cap)..................
 if(actioncount > 0)			fprintf(stdout, "ACTION (total)...........................: %ld\n", actioncount);
 if(actionessidcount > 0)		fprintf(stdout, "ACTION (containing ESSID)................: %ld\n", actionessidcount);
 if(awdlcount > 0)			fprintf(stdout, "AWDL (Apple Wireless Direct Link)........: %ld\n", awdlcount);
-if(proberequestcount > 0)		fprintf(stdout, "PROBEREQUEST.............................: %ld\n", proberequestcount);
+if(proberequestundirectedcount > 0)	fprintf(stdout, "PROBEREQUEST (undirected)................: %ld\n", proberequestundirectedcount);
 if(proberequestdirectedcount > 0)	fprintf(stdout, "PROBEREQUEST (directed)..................: %ld\n", proberequestdirectedcount);
 if(proberesponsecount > 0)		fprintf(stdout, "PROBERESPONSE (total)....................: %ld\n", proberesponsecount);
 if(proberesponsessidunsetcount > 0)	fprintf(stdout, "PROBERESPONSE (SSID unset)...............: %ld\n", proberesponsessidunsetcount);
@@ -714,10 +755,16 @@ if(protochapreqcount > 0)		fprintf(stdout, "PPP-CHAP request....................
 if(protochaprespcount > 0)		fprintf(stdout, "PPP-CHAP response........................: %ld\n", protochaprespcount);
 if(protochapsuccesscount > 0)		fprintf(stdout, "PPP-CHAP success.........................: %ld\n", protochapsuccesscount);
 if(protopapcount > 0)			fprintf(stdout, "PPP-PAP..................................: %ld\n", protopapcount);
-if(tacacspcount > 0)			fprintf(stdout, "TACACS+..................................: %ld\n", tacacspcount);
+if(tacacspcount > 0)			fprintf(stdout, "TACACS+ v1...............................: %ld\n", tacacspcount);
+if(tacacsp2count > 0)			fprintf(stdout, "TACACS+ v2...............................: %ld (unsupported)\n", tacacsp2count);
+if(tacacsp3count > 0)			fprintf(stdout, "TACACS+ v3...............................: %ld (unsupported)\n", tacacsp3count);
 if(tacacspwrittencount > 0)		fprintf(stdout, "TACACS+ written..........................: %ld\n", tacacspwrittencount);
 if(identitycount > 0)			fprintf(stdout, "IDENTITIES...............................: %ld\n", identitycount);
 if(usernamecount > 0)			fprintf(stdout, "USERNAMES................................: %ld\n", usernamecount);
+if(radiusrequestcount > 0)	fprintf(stdout, "RADIUS AUTHENTICATION (REQUEST)..........: %ld\n", radiusrequestcount);
+if(radiuschallengecount > 0)	fprintf(stdout, "RADIUS AUTHENTICATION (CHALLENGE)........: %ld\n", radiuschallengecount);
+if(radiusacceptcount > 0)	fprintf(stdout, "RADIUS AUTHENTICATION (ACCEPT)...........: %ld\n", radiusacceptcount);
+if(radiusrejectcount > 0)	fprintf(stdout, "RADIUS AUTHENTICATION (REJECT)...........: %ld\n", radiusrejectcount);
 if(eapcount > 0)			fprintf(stdout, "EAP (total)..............................: %ld\n", eapcount);
 if(eapexpandedcount > 0)		fprintf(stdout, "EAP-EXPANDED.............................: %ld\n", eapexpandedcount);
 if(eapcodereqcount > 0)			fprintf(stdout, "EAP CODE request.........................: %ld\n", eapcodereqcount);
@@ -736,14 +783,16 @@ if(eapmschapv2count > 0)		fprintf(stdout, "EAP-MSCHAPV2 messages................
 if(eapmschapv2writtencount > 0)		fprintf(stdout, "EAP-MSCHAPV2 pairs written...............: %ld\n", eapmschapv2writtencount);
 if(eaptlscount > 0)			fprintf(stdout, "EAP-TLS messages.........................: %ld\n", eaptlscount);
 if(eapolmsgcount > 0)			fprintf(stdout, "EAPOL messages (total)...................: %ld\n", eapolmsgcount);
+if(eapolrelayedcount > 0)		fprintf(stdout, "EAPOL messages relayed (ignored).........: %ld\n", eapolrelayedcount);
 if(eapolrc4count > 0)			fprintf(stdout, "EAPOL RC4 messages.......................: %ld\n", eapolrc4count);
 if(eapolrsncount > 0)			fprintf(stdout, "EAPOL RSN messages.......................: %ld\n", eapolrsncount);
 if(eapolwpacount > 0)			fprintf(stdout, "EAPOL WPA messages.......................: %ld\n", eapolwpacount);
-if(eaptimegapmax > 0) fprintf(stdout, "EAPOLTIME gap (measured maximum usec)....: %" PRId64 "\n", eaptimegapmax);
+if(eaptimegapmax > 0) fprintf(stdout, "EAPOLTIME gap (measured maximum msec)....: %" PRIu64 "\n", eaptimegapmax / 1000000);
+if(rcgapmax > 1024) rcgapmax = 1024;
 if((eapolnccount > 0) && (eapolmpcount > 0))
 	{
 	printf ("EAPOL ANONCE error corrections (NC)......: working\n");
-	if(rcgapmax > 0) fprintf(stdout, "REPLAYCOUNT gap (suggested NC)...........: %" PRIu64 "\n", rcgapmax);
+	if(rcgapmax > 0) fprintf(stdout, "REPLAYCOUNT gap (suggested NC)...........: %" PRIu64 "\n", (rcgapmax *2 +1));
 	if(rcgapmax == 0) fprintf(stdout, "REPLAYCOUNT gap (recommended NC).........: 8\n");
 	}
 if(eapolnccount == 0)
@@ -752,18 +801,21 @@ if(eapolnccount == 0)
 	if(rcgapmax > 0) fprintf(stdout, "REPLAYCOUNT gap (measured maximum).......: %" PRIu64 "\n", rcgapmax);
 	}
 if(eapolm1count > 0)			fprintf(stdout, "EAPOL M1 messages (total)................: %ld\n", eapolm1count);
-if(eapolm1kdv0count > 0)		fprintf(stdout, "EAPOL M1 messages (KDV:0 AKM defined)....: %ld\n", eapolm1kdv0count);
+if(eapolm1kdv0count > 0)		fprintf(stdout, "EAPOL M1 messages (KDV:0 AKM defined)....: %ld (PMK not recoverable)\n", eapolm1kdv0count);
 if(eapolm2count > 0)			fprintf(stdout, "EAPOL M2 messages (total)................: %ld\n", eapolm2count);
-if(eapolm2kdv0count > 0)		fprintf(stdout, "EAPOL M2 messages (KDV:0 AKM defined)....: %ld\n", eapolm2kdv0count);
-if(eapolm2ftpskcount > 0)		fprintf(stdout, "EAPOL M2 messages (FT using PSK).........: %ld\n", eapolm2ftpskcount);
+if(eapolm2oversizedcount > 0)		fprintf(stdout, "EAPOL M2 messages (oversized)............: %ld\n", eapolm2oversizedcount);
+if(eapolm2kdv0count > 0)		fprintf(stdout, "EAPOL M2 messages (KDV:0 AKM defined)....: %ld (PMK not recoverable)\n", eapolm2kdv0count);
+if(eapolm2ftpskcount > 0)		fprintf(stdout, "EAPOL M2 messages (FT using PSK).........: %ld (PMK not recoverable)\n", eapolm2ftpskcount);
 if(eapolm3count > 0)			fprintf(stdout, "EAPOL M3 messages (total)................: %ld\n", eapolm3count);
-if(eapolm3kdv0count > 0)		fprintf(stdout, "EAPOL M3 messages (KDV:0 AKM defined)....: %ld\n", eapolm3kdv0count);
+if(eapolm3oversizedcount > 0)		fprintf(stdout, "EAPOL M3 messages (oversized)............: %ld\n", eapolm3oversizedcount);
+if(eapolm3kdv0count > 0)		fprintf(stdout, "EAPOL M3 messages (KDV:0 AKM defined)....: %ld (PMK not recoverable)\n", eapolm3kdv0count);
 if(eapolm4count > 0)			fprintf(stdout, "EAPOL M4 messages (total)................: %ld\n", eapolm4count);
-if(eapolm4kdv0count > 0)		fprintf(stdout, "EAPOL M4 messages (KDV:0 AKM defined)....: %ld\n", eapolm4kdv0count);
+if(eapolm4oversizedcount > 0)		fprintf(stdout, "EAPOL M4 messages (oversized)............: %ld\n", eapolm4oversizedcount);
+if(eapolm4zeroedcount > 0)		fprintf(stdout, "EAPOL M4 messages (zeroed NONCE).........: %ld\n", eapolm4zeroedcount);
+if(eapolm4kdv0count > 0)		fprintf(stdout, "EAPOL M4 messages (KDV:0 AKM defined)....: %ld (PMK not recoverable)\n", eapolm4kdv0count);
 if(eapolmpcount > 0)			fprintf(stdout, "EAPOL pairs (total)......................: %ld\n", eapolmpcount);
-if(zeroedeapolpskcount > 0)		fprintf(stdout, "EAPOL (from zeroed PSK)..................: %ld\n", zeroedeapolpskcount);
-if(zeroedeapolpmkcount > 0)		fprintf(stdout, "EAPOL (from zeroed PMK)..................: %ld\n", zeroedeapolpmkcount);
-
+if(zeroedeapolpskcount > 0)		fprintf(stdout, "EAPOL (from zeroed PSK)..................: %ld (not converted by default options - use --all)\n", zeroedeapolpskcount);
+if(zeroedeapolpmkcount > 0)		fprintf(stdout, "EAPOL (from zeroed PMK)..................: %ld (not converted by default options - use --all)\n", zeroedeapolpmkcount);
 if(donotcleanflag == false)
 	{
 	if(eapolmpbestcount > 0)		fprintf(stdout, "EAPOL pairs (best).......................: %ld\n", eapolmpbestcount);
@@ -785,22 +837,25 @@ if(eapolm32e2count > 0)			fprintf(stdout, "EAPOL M32E2 (authorized).............
 if(eapolm32e3count > 0)			fprintf(stdout, "EAPOL M32E3 (authorized).................: %ld\n", eapolm32e3count);
 if(eapolm34e3count > 0)			fprintf(stdout, "EAPOL M34E3 (authorized).................: %ld\n", eapolm34e3count);
 if(eapolm34e4count > 0)			fprintf(stdout, "EAPOL M34E4 (authorized).................: %ld\n", eapolm34e4count);
-if(pmkiduselesscount > 0)		fprintf(stdout, "PMKID (useless)..........................: %ld\n", pmkiduselesscount);
-if(pmkidcount > 0)			fprintf(stdout, "PMKID (total)............................: %ld\n", pmkidcount);
-if(zeroedpmkidpskcount > 0)		fprintf(stdout, "PMKID (from zeroed PSK)..................: %ld\n", zeroedpmkidpskcount);
-if(zeroedpmkidpmkcount > 0)		fprintf(stdout, "PMKID (from zeroed PMK)..................: %ld\n", zeroedpmkidpmkcount);
+if(pmkiduselesscount > 0)		fprintf(stdout, "RSN PMKID (useless)......................: %ld\n", pmkiduselesscount);
+if(pmkidfaultycount > 0)		fprintf(stdout, "RSN PMKID (faulty).......................: %ld\n", pmkidfaultycount);
+if(pmkidcount > 0)			fprintf(stdout, "RSN PMKID (total)........................: %ld\n", pmkidcount);
+if(zeroedpmkidpskcount > 0)		fprintf(stdout, "RSN PMKID (from zeroed PSK)..............: %ld (not converted by default options - use --all)\n", zeroedpmkidpskcount);
+if(zeroedpmkidpmkcount > 0)		fprintf(stdout, "RSN PMKID (from zeroed PMK)..............: %ld (not converted by default options - use --all)\n", zeroedpmkidpmkcount);
 if(donotcleanflag == false)
 	{
-	if(pmkidbestcount > 0)			fprintf(stdout, "PMKID (best).............................: %ld\n", pmkidbestcount);
+	if(pmkidbestcount > 0)			fprintf(stdout, "RSN PMKID (best).........................: %ld\n", pmkidbestcount);
 	}
 else
 	{
-	if(pmkidbestcount > 0)			fprintf(stdout, "PMKID (useful)...........................: %ld\n", pmkidbestcount);
+	if(pmkidbestcount > 0)			fprintf(stdout, "RSN PMKID (useful).......................: %ld\n", pmkidbestcount);
 	}
-if(pmkidroguecount > 0)			fprintf(stdout, "PMKID ROGUE..............................: %ld\n", pmkidroguecount);
-if(pmkidwrittenhcount > 0)		fprintf(stdout, "PMKID written to 22000 hash file.........: %ld\n", pmkidwrittenhcount);
-if(pmkidwrittenjcountdeprecated > 0)	fprintf(stdout, "PMKID written to old format JtR..........: %ld\n", pmkidwrittenjcountdeprecated);
-if(pmkidwrittencountdeprecated > 0)	fprintf(stdout, "PMKID written to old format (1680x)......: %ld\n", pmkidwrittencountdeprecated);
+if(pmkidroguecount > 0)			fprintf(stdout, "RSN PMKID ROGUE..........................: %ld\n", pmkidroguecount);
+if(pmkidakmcount > 0)			fprintf(stdout, "RSN PMKID (KDV:0 AKM defined)............: %ld (PMK not recoverable)\n", pmkidakmcount);
+if(pmkidwrittenhcount > 0)		fprintf(stdout, "RSN PMKID written to 22000 hash file.....: %ld\n", pmkidwrittenhcount);
+if(pmkidclientwrittenhcount > 0)	fprintf(stdout, "RSN PMKID written to 22000 hash file.....: %ld (possible MESH/REPEATER PMKIDs)\n", pmkidclientwrittenhcount);
+if(pmkidwrittenjcountdeprecated > 0)	fprintf(stdout, "RSN PMKID written to old format JtR......: %ld\n", pmkidwrittenjcountdeprecated);
+if(pmkidwrittencountdeprecated > 0)	fprintf(stdout, "RSN PMKID written to old format (1680x)..: %ld\n", pmkidwrittencountdeprecated);
 if(pcapreaderrors > 0)			fprintf(stdout, "packet read error........................: %ld\n", pcapreaderrors);
 if(radiotaperrorcount > 0)		fprintf(stdout, "packet with damaged radiotap header......: %ld\n", radiotaperrorcount);
 if(zeroedtimestampcount > 0)		fprintf(stdout, "packets with zeroed timestamps...........: %ld\n", zeroedtimestampcount);
@@ -814,33 +869,21 @@ if(taglenerrorcount > 0)		fprintf(stdout, "IE TAG length error (malformed packet
 if(essiderrorcount > 0)			fprintf(stdout, "ESSID error (malformed packets)..........: %ld\n", essiderrorcount);
 eapolmsgerrorcount = eapolmsgerrorcount +eapolm1errorcount +eapolm2errorcount +eapolm3errorcount +eapolm4errorcount;
 if(eapolmsgerrorcount > 0)		fprintf(stdout, "EAPOL messages (malformed packets).......: %ld\n", eapolmsgerrorcount);
-
-c = 0;
-fprintf(stdout, "\nfrequency statistics from radiotap header (frequency: received packets)\n"
-		"-----------------------------------------------------------------------\n");
-for(p = 2400; p < 7000; p ++)
+if(radiotappresent == true)
 	{
-	if(usedfrequency[p] != 0)
+	c = 0;
+	fprintf(stdout, "\nfrequency statistics from radiotap header (frequency: received packets)\n"
+			"-----------------------------------------------------------------------\n");
+	for(p = 2412; p <= 7115; p ++)
 		{
-		fprintf(stdout, "% 5d: %d\t", p, usedfrequency[p]);
-		c++;
-		if((c %4) == 0) fprintf(stdout, "\n");
+		if(usedfrequency[p] != 0)
+			{
+			fprintf(stdout, "% 5d: %d\t", p, usedfrequency[p]);
+			c++;
+			if((c %4) == 0) fprintf(stdout, "\n");
+			}
 		}
-	}
-if(c == 0) fprintf(stdout, "not available due to missing radiotap header");
-fprintf(stdout, "\n");
-
-if((eapolwrittencount +eapolncwrittencount +eapolwrittenhcpxcountdeprecated +eapolncwrittenhcpxcountdeprecated +eapolwrittenhcpcountdeprecated 
-	+eapolwrittenjcountdeprecated +pmkidwrittenhcount +pmkidwrittenjcountdeprecated +pmkidwrittencountdeprecated
-	+eapmd5writtencount +eapmd5johnwrittencount +eapleapwrittencount +eapmschapv2writtencount +tacacspwrittencount) == 0)
-	{
-	printf( "\nInformation: no hashes written to hash files\n");
-	}
-if(sequenceerrorcount > 0)
-	{
-	fprintf(stdout, "\nWarning: out of sequence timestamps!\n"
-		"This dump file contains frames with out of sequence timestamps.\n"
-		"That is a bug of the capturing tool.\n");
+	fprintf(stdout, "\n");
 	}
 if(zeroedtimestampcount > 0)
 	{
@@ -854,107 +897,143 @@ if(eapolmsgtimestamperrorcount > 0)
 	fprintf(stdout, "\nWarning: wrong timestamps!\n"
 		"This dump file contains frames with wrong timestamps.\n"
 		"It prevent calculation of EAPOL TIMEOUT values.\n"
-		"That is a bug of the capturing tool.\n");
+		"That is a bug of the capturing/cleaning tool.\n");
 	}
-if(((deauthenticationcount +disassociationcount) >= 100) && ((deauthenticationcount +disassociationcount) <= 10000))
+if(sequenceerrorcount > 0)
 	{
-	fprintf(stdout, "\nWarning: too many deauthentication/disassociation frames detected!\n"
-		"That can cause that an ACCESS POINT change channel, reset EAPOL TIMER,\n"
-		"renew ANONCE and set PMKID to zero.\n"
-		"This could prevent to calculate a valid EAPOL MESSAGE PAIR\n"
-		"or to get a valid PMKID.\n");
+	fprintf(stdout, "\nWarning: out of sequence timestamps!\n"
+		"This dump file contains frames with out of sequence timestamps.\n"
+		"That is a bug of the capturing/cleaning tool.\n");
 	}
-if((deauthenticationcount +disassociationcount) > 10000)
-	{
-	fprintf(stdout, "\nWarning: excessive number of deauthentication/disassociation frames detected!\n"
-		"That can cause that an ACCESS POINT change channel, reset EAPOL TIMER,\n"
-		"renew ANONCE and set PMKID to zero.\n"
-		"This could prevent to calculate a valid EAPOL MESSAGE PAIR\n"
-		"or to get a valid PMKID.\n");
-	}
-if(ancientdumpfileformat == true) 
+if(ancientdumpfileformat == true)
 	{
 	fprintf(stdout, "\nInformation: limited dump file format detected!\n"
 		"This file format is a very basic format to save captured network data.\n"
-		"It is recommended to use PCAP Next Generation dump file format (or pcapng for short) instead.\n"
-		"The PCAP Next Generation dump file format is an attempt to overcome the limitations\n"
-		"of the currently widely used (but limited) libpcap (cap, pcap) format.\n"
+		"It is recommended to use PCAP Next Generation dump file format (or pcapng for short) instead. "
+		"The PCAP Next Generation dump file format is an attempt to overcome the limitations "
+		"of the currently widely used (but very limited) libpcap (cap, pcap) format.\n"
 		"https://www.wireshark.org/docs/wsug_html_chunked/AppFiles.html#ChAppFilesCaptureFilesSection\n"
 		"https://github.com/pcapng/pcapng\n");
+	}
+if(ieee80211flag == false)
+	{
+	fprintf(stdout, "\n");
+	return;
 	}
 if(radiotappresent == false)
 	{
 	fprintf(stdout, "\nInformation: radiotap header is missing!\n"
-		"Radiotap is a de facto standard for 802.11 frame injection and reception.\n"
-		"The radiotap header format is a mechanism to supply additional information about frames,\n"
-		"from the driver to userspace applications.\n"
+		"Radiotap is a de facto standard for 802.11 frame injection and "
+		"reception. The radiotap header format is a mechanism to supply "
+		"additional information about frames, from the driver to userspace applications.\n"
 		"https://www.radiotap.org/\n");
+	}
+if(magicblockcount > 1)
+	{
+	fprintf(stdout, "\nWarning: this dump file contains more than one custom block!\n"
+		"This always happens if dump files are merged!\n"
+		"Do not merge dump files, because this destroys assigned hash values!\n");
+	}
+if(((deauthenticationcount +disassociationcount) >= 100) && ((deauthenticationcount +disassociationcount) <= 10000))
+	{
+	fprintf(stdout, "\nWarning: too many deauthentication/disassociation frames detected!\n"
+		"That can cause that an ACCESS POINT change channel, reset EAPOL TIMER, "
+		"renew ANONCE and set PMKID to zero. "
+		"This could prevent to calculate a valid EAPOL MESSAGE PAIR, to get a valid PMKID "
+		"or to decrypt the traffic.\n");
+	}
+if((deauthenticationcount +disassociationcount) > 10000)
+	{
+	fprintf(stdout, "\nWarning: excessive number of deauthentication/disassociation frames detected!\n"
+		"That can cause that an ACCESS POINT change channel, reset EAPOL TIMER, "
+		"renew ANONCE and set PMKID to zero. "
+		"This could prevent to calculate a valid EAPOL MESSAGE PAIR, to get a valid PMKID "
+		"or to decrypt the traffic.\n");
 	}
 if(((beaconcount + proberesponsecount) == 0) && ((associationrequestcount + reassociationrequestcount) == 0))
 	{
 	fprintf(stdout, "\nInformation: missing frames!\n"
 		"This dump file does not contain BEACON or PROBERESPONSE frames.\n"
 		"This frames contain the ESSID which is mandatory to calculate a PMK.\n"
-		"It always happens if the capture file was cleaned or\n"
-		"it could happen if filter options are used during capturing.\n"
+		"It always happens if the capture file was cleaned or "
+		"it could happen if filter options are used during capturing. "
 		"That makes it impossible to recover the PSK.\n");
 	}
-if(proberequestcount == 0)
+if(proberequestundirectedcount == 0)
 	{
 	fprintf(stdout, "\nInformation: missing frames!\n"
 		"This dump file does not contain undirected proberequest frames.\n"
-		"An undirected proberequest may contain information about the PSK.\n"
-		"It always happens if the capture file was cleaned or\n"
+		"An undirected proberequest may contain information about the PSK. "
+		"It always happens if the capture file was cleaned or "
 		"it could happen if filter options are used during capturing.\n"
 		"That makes it hard to recover the PSK.\n");
 	}
 if((authenticationcount +associationrequestcount +reassociationrequestcount) == 0)
 	{
 	fprintf(stdout, "\nInformation: missing frames!\n"
-		"This dump file does not contain important frames like\n"
-		"authentication, association or reassociation.\n"
-		"It always happens if the capture file was cleaned or\n"
-		"it could happen if filter options are used during capturing.\n"
+		"This dump file does not contain important frames like authentication, association or reassociation.\n"
+		"It always happens if the capture file was cleaned or "
+		"it could happen if filter options are used during capturing. "
 		"That makes it hard to recover the PSK.\n");
+	if(timestampdiff < 60000000000) fprintf(stdout, "Duration of the dump tool was a way too short to capture enough additional information.\n");
 	}
 if(eapolm1ancount <= 1)
 	{
 	fprintf(stdout, "\nInformation: missing frames!\n"
 		"This dump file does not contain enough EAPOL M1 frames.\n"
-		"It always happens if the capture file was cleaned or\n"
+		"It always happens if the capture file was cleaned or "
 		"it could happen if filter options are used during capturing.\n"
-		"That makes it impossible to calculate nonce-error-correction values.\n");
+		"That makes it impossible to calculate nonce-error-correction values.\n"
+		"https://hashcat.net/forum/thread-6361.html\n");
+	if(timestampdiff < 60000000000) fprintf(stdout, "Duration of the dump tool was a way too short to capture enough additional information.\n");
+	}
+if((eapolm1count + eapolm2count + eapolm4count > 0) && (eapolm3count == 0))
+	{
+	fprintf(stdout, "\nInformation: missing EAPOL M3 frames!\n"
+		"This dump file does not contain EAPOL M3 frames (possible packet loss).\n"
+		"It strongly recommended to recapture the traffic or "
+		"to use --all option to convert all possible EAPOL MESSAGE PAIRs.\n");
 	}
 if(malformedcount > 5)
 	{
-	printf( "\nInformation: malformed packets detected!\n"   
-		"In monitor mode the adapter does not check to see if the cyclic redundancy check (CRC)\n"
-		"values are correct for packets captured. The device is able to detect the Physical Layer\n"
-		"Convergence Procedure (PLCP) preamble and is able to synchronize to it, but if there is\n"
+	fprintf(stdout, "\nInformation: malformed packets detected!\n"
+		"In monitor mode the adapter does not check to see if the cyclic redundancy check (CRC) "
+		"values are correct for packets captured. The device is able to detect the Physical Layer "
+		"Convergence Procedure (PLCP) preamble and is able to synchronize to it, but if there is "
 		"a bit error in the payload it can lead to unexpected results.\n"
 		"Please analyze the dump file with tshark or Wireshark or make a better capture!\n");
+	}
+if((eapolwrittencount +eapolncwrittencount +eapolwrittenhcpxcountdeprecated +eapolncwrittenhcpxcountdeprecated +eapolwrittenhcpcountdeprecated
+	+eapolwrittenjcountdeprecated +pmkidwrittenhcount +pmkidwrittenjcountdeprecated +pmkidwrittencountdeprecated
+	+eapmd5writtencount +eapmd5johnwrittencount +eapleapwrittencount +eapmschapv2writtencount +tacacspwrittencount) == 0)
+	{
+	fprintf(stdout, "\nInformation: no hashes written to hash files\n");
 	}
 fprintf(stdout, "\n");
 return;
 }
 /*===========================================================================*/
-static void printlinklayerinfo()
+static void printlinklayerinfo(void)
 {
 static uint32_t c;
-static struct timeval tvmin;
-static struct timeval tvmax;
+static time_t tvmin;
+static time_t tvmax;
 static char timestringmin[32];
 static char timestringmax[32];
 
 radiotappresent = false;
-tvmin.tv_sec = timestampmin /1000000;
-tvmin.tv_usec = timestampmin %1000000;
-strftime(timestringmin, 32, "%d.%m.%Y %H:%M:%S", localtime(&tvmin.tv_sec));
-tvmax.tv_sec = timestampmax /1000000;
-tvmax.tv_usec = timestampmax %1000000;
-strftime(timestringmax, 32, "%d.%m.%Y %H:%M:%S", localtime(&tvmax.tv_sec));
-fprintf(stdout, "timestamp minimum (GMT)..................: %s\n", timestringmin);
-fprintf(stdout, "timestamp maximum (GMT)..................: %s\n", timestringmax);
+tvmin = timestampmin /1000000000;
+strftime(timestringmin, 32, "%d.%m.%Y %H:%M:%S", gmtime(&tvmin));
+tvmax = timestampmax /1000000000;
+timestampdiff = timestampmax - timestampmin;
+strftime(timestringmax, 32, "%d.%m.%Y %H:%M:%S", gmtime(&tvmax));
+fprintf(stdout, "timestamp minimum (timestamp)............: %s (%ld)\n", timestringmin, tvmin);
+fprintf(stdout, "timestamp maximum (timestamp)............: %s (%ld)\n", timestringmax, tvmax);
+if(timestampdiff > 0)
+	{
+	if(timestampdiff > 60000000000) fprintf(stdout, "duration of the dump tool (minutes)......: %" PRIu64 "\n", timestampdiff / 60000000000);
+	else fprintf(stdout, "duration of the dump tool (seconds)......: %" PRIu64 "\n", timestampdiff / 1000000000);
+	}
 fprintf(stdout, "used capture interfaces..................: %d\n", iface);
 for(c = 0; c < iface; c++)
 	{
@@ -977,7 +1056,7 @@ for(c = 0; c < iface; c++)
 return;
 }
 /*===========================================================================*/
-static void outputwordlists()
+static void outputwordlists(void)
 {
 static int wecl;
 static maclist_t *zeigermac, *zeigermacold;
@@ -987,7 +1066,7 @@ qsort(aplist, aplistptr -aplist, MACLIST_SIZE, sort_maclist_by_essidlen);
 wecl = strlen(pcapngweakcandidate);
 if((wecl > 0) && (wecl < 64) && (strcmp(pcapngweakcandidate, "N/A") != 0))
 	{
-	if(fh_essid != NULL) fprintf(fh_essid, "%s\n", pcapngweakcandidate); 
+	if(fh_essid != NULL) fprintf(fh_essid, "%s\n", pcapngweakcandidate);
 	}
 for(zeigermac = aplist; zeigermac < aplistptr; zeigermac++)
 	{
@@ -1004,7 +1083,7 @@ for(zeigermac = aplist; zeigermac < aplistptr; zeigermac++)
 return;
 }
 /*===========================================================================*/
-static void outputdeviceinfolist()
+static void outputdeviceinfolist(void)
 {
 static int p;
 static maclist_t *zeigermac;
@@ -1025,6 +1104,7 @@ for(zeigermac = aplist; zeigermac < aplistptr; zeigermac++)
 		fprintf(fh_deviceinfo, "\t");
 		for(p = 0; p < zeigermac->enrolleelen; p++) fprintf(fh_deviceinfo, "%02x", zeigermac->enrollee[p]);
 		}
+	fwritedeviceinfostr(zeigermac->essidlen, zeigermac->essid, fh_deviceinfo);
 	fprintf(fh_deviceinfo, "\n");
 	deviceinfocount++;
 	}
@@ -1035,7 +1115,7 @@ static void writecsv(uint64_t timestamp, uint8_t *mac, tags_t *tags)
 {
 static int c;
 static int p;
-static struct timeval tvo;
+static time_t tvo;
 static float latitude;
 static char ew;
 static float longitude;
@@ -1053,9 +1133,8 @@ static char timestring[24];
 
 if(tags->essidlen == 0) return;
 if(tags->essid[0] == 0) return;
-tvo.tv_sec = timestamp /1000000;
-tvo.tv_usec = 0;
-strftime(timestring, 24, "%Y-%m-%d\t%H:%M:%S", gmtime(&tvo.tv_sec));
+tvo = timestamp /1000000000;
+strftime(timestring, 24, "%Y-%m-%d\t%H:%M:%S", gmtime(&tvo));
 if((tags->essidlen != 0) && (tags->essid[0] != 0)) fprintf(fh_csv, "%s\t%02x:%02x:%02x:%02x:%02x:%02x\t%.*s\t", timestring, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], tags->essidlen, tags->essid);
 else fprintf(fh_csv, "%s\t%02x:%02x:%02x:%02x:%02x:%02x\t<HIDDEN ESSID>\t", timestring, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 if(tags->kdversion == 0) fprintf(fh_csv, "OPEN");
@@ -1210,7 +1289,7 @@ memcpy(&gpwplold, &gpwpl, gpwpllen);
 return;
 }
 /*===========================================================================*/
-static void outputtacacsplist()
+static void outputtacacsplist(void)
 {
 static uint32_t c;
 static tacacsplist_t *zeiger, *zeigerold;
@@ -1227,7 +1306,7 @@ if(fh_tacacsp != NULL)
 	}
 for(zeiger = tacacsplist +1; zeiger < tacacsplistptr; zeiger++)
 	{
-	if((zeigerold->sessionid == zeiger->sessionid) && (zeigerold->sequencenr == zeiger->sequencenr)  && (zeigerold->len == zeiger->len) && (memcmp(zeigerold->data, zeiger->data, zeiger->len) == 0)) continue;
+	if((zeigerold->sessionid == zeiger->sessionid) && (zeigerold->sequencenr == zeiger->sequencenr) && (zeigerold->len == zeiger->len) && (memcmp(zeigerold->data, zeiger->data, zeiger->len) == 0)) continue;
 	if(fh_tacacsp != NULL)
 		{
 		fprintf(fh_tacacsp, "$tacacs-plus$0$%08x$", zeiger->sessionid);
@@ -1240,20 +1319,30 @@ for(zeiger = tacacsplist +1; zeiger < tacacsplistptr; zeiger++)
 return;
 }
 /*===========================================================================*/
-void processtacacsppacket(uint32_t restlen, uint8_t *tacacspptr)
+static void processtacacsppacket(uint32_t restlen, uint8_t *tacacspptr)
 {
 static uint32_t authlen;
 static tacacsp_t *tacacsp;
-static tacacsplist_t *tacacsplistnew; 
+static tacacsplist_t *tacacsplistnew;
 
 if(restlen < (uint32_t)TACACSP_SIZE) return;
 tacacsp = (tacacsp_t*)tacacspptr;
+if(tacacsp->type == TACACS2_AUTHENTICATION)
+	{
+	tacacsp2count++;
+	return;
+	}
+if(tacacsp->type == TACACS3_AUTHENTICATION)
+	{
+	tacacsp3count++;
+	return;
+	}
 if(tacacsp->type != TACACS_AUTHENTICATION) return;
 authlen = ntohl(tacacsp->len);
 if((authlen > restlen -TACACSP_SIZE) || (authlen > TACACSPMAX_LEN)) return;
 if(tacacsplistptr >= tacacsplist +tacacsplistmax)
 	{
-	tacacsplistnew = realloc(tacacsplist, (tacacsplistmax +TACACSPLIST_MAX) *TACACSPLIST_SIZE);
+	tacacsplistnew = (tacacsplist_t*)realloc(tacacsplist, (tacacsplistmax +TACACSPLIST_MAX) *TACACSPLIST_SIZE);
 	if(tacacsplistnew == NULL)
 		{
 		printf("failed to allocate memory for internal list\n");
@@ -1287,7 +1376,7 @@ protochapcount++;
 return;
 }
 /*===========================================================================*/
-static void processprotopapppacket()
+static void processprotopapppacket(void)
 {
 
 protopapcount++;
@@ -1296,7 +1385,7 @@ return;
 /*===========================================================================*/
 static void processptppacket(uint32_t restlen, uint8_t *ptpptr)
 {
-static  ptp_t *ptp;
+static ptp_t *ptp;
 
 if(restlen < (uint32_t)PTP_SIZE) return;
 ptp = (ptp_t*)ptpptr;
@@ -1321,24 +1410,44 @@ grecount++;
 return;
 }
 /*===========================================================================*/
+static void processradiuspacket(uint64_t timestamp, uint32_t restlen, uint8_t *radiusptr)
+{
+static radius_t *radius;
+static uint16_t radiuslen;
+
+if(restlen < RADIUS_MIN_SIZE) return;
+radius = (radius_t*)radiusptr;
+radiuslen = ntohs(radius->len);
+if(restlen != radiuslen) return;
+if(radius->code ==RADIUS_ACCESS_REQUEST) radiusrequestcount++;
+else if(radius->code == RADIUS_ACCESS_ACCEPT) radiusacceptcount++;
+else if(radius->code == RADIUS_ACCESS_REJECT) radiusrejectcount++;
+else if(radius->code == RADIUS_ACCESS_CHALLENGE) radiuschallengecount++;
+timestamp = timestamp;
+return;
+}
+/*===========================================================================*/
 static void processudppacket(uint64_t timestamp, uint32_t restlen, uint8_t *udpptr)
 {
 static udp_t *udp;
-static uint16_t udplen; 
+static uint16_t udplen;
+static uint16_t udpsourceport;
+static uint16_t udpdestinationport;
 
 if(restlen < UDP_SIZE) return;
 udp = (udp_t*)udpptr;
 udplen = ntohs(udp->len);
 if(restlen < udplen) return;
 udpcount++;
-//dummy code to satisfy gcc untill full code is implemented
-timestamp = timestamp;
+udpsourceport = ntohs(udp->sourceport);
+udpdestinationport = ntohs(udp->destinationport);
+if((udpsourceport == UDP_RADIUS_PORT) || (udpdestinationport == UDP_RADIUS_PORT)) processradiuspacket(timestamp, restlen -UDP_SIZE, udpptr +UDP_SIZE);
 return;
 }
 /*===========================================================================*/
 static void processtcppacket(uint64_t timestamp, uint32_t restlen, uint8_t *tcpptr)
 {
-static uint32_t tcplen; 
+static uint32_t tcplen;
 static tcp_t *tcp;
 static tacacsp_t *tacacsp;
 
@@ -1357,7 +1466,7 @@ timestamp = timestamp;
 return;
 }
 /*===========================================================================*/
-static void processicmp4()
+static void processicmp4(void)
 {
 icmp4count++;
 return;
@@ -1381,7 +1490,7 @@ ipv4count++;
 return;
 }
 /*===========================================================================*/
-static void processicmp6()
+static void processicmp6(void)
 {
 icmp6count++;
 return;
@@ -1447,7 +1556,7 @@ static inline size_t mschapv2_username_clean(uint8_t *username, size_t usernamel
 {
 static char *ptr;
 
-ptr = memchr(username, '\\', usernamelen);
+ptr = (char*)memchr(username, '\\', usernamelen);
 if(ptr == NULL)
 	{
 	memcpy(usernameclean, username, usernamelen);
@@ -1457,7 +1566,7 @@ memcpy(usernameclean, ptr +1, username +usernamelen -(uint8_t*)ptr -1);
 return (username +usernamelen -(uint8_t*)ptr -1);
 }
 /*===========================================================================*/
-static void outputeapmschapv2hashlist()
+static void outputeapmschapv2hashlist(void)
 {
 static eapmschapv2hashlist_t *zeiger, *zeigerold;
 static uint8_t challenge[MSCHAPV2_CHALLENGE_LEN_MAX];
@@ -1489,12 +1598,12 @@ return;
 /*===========================================================================*/
 static void addeapmschapv2hash(uint8_t id, uint8_t mschapv2usernamelen, uint8_t *mschapv2username, uint8_t *mschapv2request, uint8_t *mschapv2response)
 {
-static eapmschapv2hashlist_t *eapmschapv2hashlistnew; 
+static eapmschapv2hashlist_t *eapmschapv2hashlistnew;
 
 eapmschapv2hashcount++;
 if(eapmschapv2hashlistptr >= eapmschapv2hashlist +eapmschapv2hashlistmax)
 	{
-	eapmschapv2hashlistnew = realloc(eapmschapv2hashlist, (eapmschapv2hashlistmax +EAPMSCHAPV2HASHLIST_MAX) *EAPMSCHAPV2HASHLIST_SIZE);
+	eapmschapv2hashlistnew = (eapmschapv2hashlist_t*)realloc(eapmschapv2hashlist, (eapmschapv2hashlistmax +EAPMSCHAPV2HASHLIST_MAX) *EAPMSCHAPV2HASHLIST_SIZE);
 	if(eapmschapv2hashlistnew == NULL)
 		{
 		printf("failed to allocate memory for internal list\n");
@@ -1583,14 +1692,14 @@ else if((eapcode == EAP_CODE_RESP) && (eapmschapv2->opcode == EAP_MSCHAPV2_OPCOD
 		if(memcmp(zeiger->client, macfm, 6) != 0) continue;
 		zeiger->mschapv2usernamelen = mschapv2usernamelen;
 		memcpy(zeiger->mschapv2username, mschapv2usernameptr, mschapv2usernamelen);
-		addeapmschapv2hash(eapmschapv2->id, zeiger->mschapv2usernamelen, zeiger->mschapv2username, zeiger->mschapv2request, eapmschapv2->mschapv2data); 
+		addeapmschapv2hash(eapmschapv2->id, zeiger->mschapv2usernamelen, zeiger->mschapv2username, zeiger->mschapv2request, eapmschapv2->mschapv2data);
 		}
 	qsort(eapmschapv2msglist, EAPMSCHAPV2MSGLIST_MAX +1, EAPMSCHAPV2MSGLIST_SIZE, sort_eapmschapv2msglist_by_timestamp);
 	}
 return;
 }
 /*===========================================================================*/
-static void outputeapleaphashlist()
+static void outputeapleaphashlist(void)
 {
 static eapleaphashlist_t *zeiger, *zeigerold;
 
@@ -1628,12 +1737,12 @@ return;
 /*===========================================================================*/
 static void addeapleaphash(uint8_t id, uint8_t leapusernamelen, uint8_t *leapusername, uint8_t *leaprequest, uint8_t *leapresponse)
 {
-static eapleaphashlist_t *eapleaphashlistnew; 
+static eapleaphashlist_t *eapleaphashlistnew;
 
 eapleaphashcount++;
 if(eapleaphashlistptr >= eapleaphashlist +eapleaphashlistmax)
 	{
-	eapleaphashlistnew = realloc(eapleaphashlist, (eapleaphashlistmax +EAPLEAPHASHLIST_MAX) *EAPLEAPHASHLIST_SIZE);
+	eapleaphashlistnew = (eapleaphashlist_t*)realloc(eapleaphashlist, (eapleaphashlistmax +EAPLEAPHASHLIST_MAX) *EAPLEAPHASHLIST_SIZE);
 	if(eapleaphashlistnew == NULL)
 		{
 		fprintf(stderr, "failed to allocate memory for internal list\n");
@@ -1673,7 +1782,7 @@ if(eapcode == EAP_CODE_REQ)
 	if(eapleap->leaplen != LEAPREQ_LEN_MAX) return;
 	if(eapleap->leaplen > eapleaplen -EAPLEAP_SIZE) return;
 	if(eapleap->leaplen == eapleaplen -EAPLEAP_SIZE) return;
-	if(memcmp(&zeroed32, eapleap->leapdata, LEAPREQ_LEN_MAX) == 0) return; 
+	if(memcmp(&zeroed32, eapleap->leapdata, LEAPREQ_LEN_MAX) == 0) return;
 	memset(zeiger, 0, EAPLEAPMSGLIST_SIZE);
 	zeiger->timestamp = eaptimestamp;
 	memcpy(zeiger->ap, macfm, 6);
@@ -1700,7 +1809,7 @@ else if(eapcode == EAP_CODE_RESP)
 	zeiger = eapleapmsglist +EAPLEAPMSGLIST_MAX;
 	if(eapleap->leaplen != LEAPRESP_LEN_MAX) return;
 	if(eapleap->leaplen > eapleaplen -EAPLEAP_SIZE) return;
-	if(memcmp(&zeroed32, eapleap->leapdata, LEAPRESP_LEN_MAX) == 0) return; 
+	if(memcmp(&zeroed32, eapleap->leapdata, LEAPRESP_LEN_MAX) == 0) return;
 	memset(zeiger, 0, EAPLEAPMSGLIST_SIZE);
 	zeiger->timestamp = eaptimestamp;
 	memcpy(zeiger->ap, macto, 6);
@@ -1714,14 +1823,14 @@ else if(eapcode == EAP_CODE_RESP)
 		if((zeiger->id) != eapleap->id) continue;
 		if(memcmp(zeiger->ap, macto, 6) != 0) continue;
 		if(memcmp(zeiger->client, macfm, 6) != 0) continue;
-		addeapleaphash(eapleap->id, zeiger->leapusernamelen, zeiger->leapusername, zeiger->leaprequest, eapleap->leapdata); 
+		addeapleaphash(eapleap->id, zeiger->leapusernamelen, zeiger->leapusername, zeiger->leaprequest, eapleap->leapdata);
 		}
 	qsort(eapleapmsglist, EAPLEAPMSGLIST_MAX +1, EAPLEAPMSGLIST_SIZE, sort_eapleapmsglist_by_timestamp);
 	}
 return;
 }
 /*===========================================================================*/
-static void outputeapmd5hashlist()
+static void outputeapmd5hashlist(void)
 {
 static eapmd5hashlist_t *zeiger, *zeigerold;
 
@@ -1779,12 +1888,12 @@ return;
 /*===========================================================================*/
 static void addeapmd5hash(uint8_t id, uint8_t *challenge, uint8_t *response)
 {
-static eapmd5hashlist_t *eapmd5hashlistnew; 
+static eapmd5hashlist_t *eapmd5hashlistnew;
 
 eapmd5hashcount++;
 if(eapmd5hashlistptr >= eapmd5hashlist +eapmd5hashlistmax)
 	{
-	eapmd5hashlistnew = realloc(eapmd5hashlist, (eapmd5hashlistmax +EAPMD5HASHLIST_MAX) *EAPMD5HASHLIST_SIZE);
+	eapmd5hashlistnew = (eapmd5hashlist_t*)realloc(eapmd5hashlist, (eapmd5hashlistmax +EAPMD5HASHLIST_MAX) *EAPMD5HASHLIST_SIZE);
 	if(eapmd5hashlistnew == NULL)
 		{
 		fprintf(stderr, "failed to allocate memory for internal list\n");
@@ -1813,7 +1922,7 @@ eapmd5 = (eapmd5_t*)eapmd5ptr;
 eapmd5len = ntohs(eapmd5->eapmd5len);
 if(eapmd5len != restlen) return;
 if(eapmd5->md5len != EAPMD5_LEN_MAX) return;
-if(memcmp(&zeroed32, eapmd5->md5data, EAPMD5_LEN_MAX) == 0) return; 
+if(memcmp(&zeroed32, eapmd5->md5data, EAPMD5_LEN_MAX) == 0) return;
 if(eapcode == EAP_CODE_REQ)
 	{
 	zeiger = eapmd5msglist +EAPMD5MSGLIST_MAX;
@@ -1842,7 +1951,7 @@ else if(eapcode == EAP_CODE_RESP)
 		if((zeiger->id) != eapmd5->id) continue;
 		if(memcmp(zeiger->ap, macto, 6) != 0) continue;
 		if(memcmp(zeiger->client, macfm, 6) != 0) continue;
-		addeapmd5hash(eapmd5->id, zeiger->md5, eapmd5->md5data); 
+		addeapmd5hash(eapmd5->id, zeiger->md5, eapmd5->md5data);
 		}
 	qsort(eapmd5msglist, EAPMD5MSGLIST_MAX +1, EAPMD5MSGLIST_SIZE, sort_eapmd5msglist_by_timestamp);
 	}
@@ -1851,7 +1960,7 @@ return;
 /*===========================================================================*/
 static void hccap2base(unsigned char *in, unsigned char b)
 {
-static const char itoa64[64] = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+static const char itoa64[65] = "./0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
 
 fprintf(fh_pmkideapoljtrdeprecated, "%c", (itoa64[in[0] >> 2]));
 fprintf(fh_pmkideapoljtrdeprecated, "%c", (itoa64[((in[0] & 0x03) << 4) | (in[1] >> 4)]));
@@ -1864,76 +1973,53 @@ else fprintf(fh_pmkideapoljtrdeprecated, "%c", (itoa64[((in[1] & 0x0f) << 2)]));
 return;
 }
 /*===========================================================================*/
+static bool testfaultypmkid(uint8_t *faultypmkid)
+{
+static const uint8_t faultypmkid1[4] =
+{
+0x00, 0x00, 0x6e, 0x00
+};
+
+if(memcmp(&faultypmkid1, faultypmkid, 4) == 0)
+	{
+	pmkidfaultycount++;
+	return true;
+	}
+return false;
+}
+/*===========================================================================*/
 static bool testpmkid(uint8_t *testpmk, uint8_t *macsta, uint8_t *macap, uint8_t *pmkid)
 {
-static size_t testpmkidlen;
-static EVP_MD_CTX *mdctx;
-static EVP_PKEY *pkey;
-static char *pmkname = "PMK Name";
+static const char *pmkname = "PMK Name";
+static uint8_t pmkidcalc[64];
 
-static uint8_t message[32];
-static uint8_t testpmkid[EVP_MAX_MD_SIZE];
+memcpy(pmkidcalc, pmkname, 8);
+memcpy(&pmkidcalc[8], macap, 6);
+memcpy(&pmkidcalc[14], macsta, 6);
 
-memcpy(&message, pmkname, 8);
-memcpy(&message[8], macap, 6);
-memcpy(&message[14], macsta, 6);
-testpmkidlen = 16;
-mdctx = EVP_MD_CTX_new();
-if(mdctx == 0) return false;
-pkey = EVP_PKEY_new_mac_key(EVP_PKEY_HMAC, NULL, testpmk, 32);
-if(pkey == NULL)
-	{
-	EVP_MD_CTX_free(mdctx);
-	return false;
-	}
-if(EVP_DigestSignInit(mdctx, NULL,  EVP_sha1(), NULL, pkey) != 1)
-	{
-	EVP_PKEY_free(pkey);
-	EVP_MD_CTX_free(mdctx);
-	return false;
-	}
-if(EVP_DigestSignUpdate(mdctx, message, 20) != 1)
-	{
-	EVP_PKEY_free(pkey);
-	EVP_MD_CTX_free(mdctx);
-	return false;
-	}
-if(EVP_DigestSignFinal(mdctx, testpmkid, &testpmkidlen) <= 0)
-	{
-	EVP_PKEY_free(pkey);
-	EVP_MD_CTX_free(mdctx);
-	return false;
-	}
-EVP_PKEY_free(pkey);
-EVP_MD_CTX_free(mdctx);
-if(memcmp(&testpmkid, pmkid, 16) == 0) return true;
-return false;
+if(!EVP_MAC_init(ctxhmac, testpmk, 32, paramssha1)) return false;
+if(!EVP_MAC_update(ctxhmac, pmkidcalc, 20)) return false;
+if(!EVP_MAC_final(ctxhmac, pmkidcalc, NULL, 20)) return false;
+if(memcmp(pmkid, pmkidcalc, 16) != 0) return false;
+return true;
 }
 /*===========================================================================*/
 static bool testeapolpmk(uint8_t *testpmk, uint8_t keyver, uint8_t *macsta, uint8_t *macap, uint8_t *nonceap, uint8_t eapollen, uint8_t *eapolmessage)
 {
 static uint8_t *pkeptr;
 static wpakey_t *wpakzero, *wpak;
-
-static size_t testptklen;
-static size_t testmiclen;
-static EVP_MD_CTX *mdctx;
-static EVP_PKEY *pkey;
-
 static uint8_t pkedata[102];
-static uint8_t testptk[EVP_MAX_MD_SIZE];
-static uint8_t eapoldata[0xff];
-static uint8_t testmic[EVP_MAX_MD_SIZE];
+static uint8_t eapoltmp[1024];
 
-memcpy(&eapoldata, eapolmessage, eapollen);
-wpakzero = (wpakey_t*)(eapoldata +EAPAUTH_SIZE);
-memset(wpakzero->keymic, 0, 16);
+memset(eapoltmp, 0, sizeof(eapoltmp));
+memcpy(eapoltmp, eapolmessage, eapollen);
+wpakzero = (wpakey_t*)(eapoltmp +EAPAUTH_SIZE);
 wpak = (wpakey_t*)(eapolmessage +EAPAUTH_SIZE);
-if(keyver == 2)
+memset(wpakzero->keymic, 0, 16);
+
+if((keyver == 1) || (keyver == 2))
 	{
 	memset(&pkedata, 0, sizeof(pkedata));
-	memset(&testptk, 0, sizeof(testptk));
-	memset(&testmic, 0, sizeof(testptk));
 	pkeptr = pkedata;
 	memcpy(pkeptr, "Pairwise key expansion", 23);
 	if(memcmp(macap, macsta, 6) < 0)
@@ -1946,7 +2032,6 @@ if(keyver == 2)
 		memcpy(pkeptr +23, macsta, 6);
 		memcpy(pkeptr +29, macap, 6);
 		}
-
 	if(memcmp(nonceap, wpak->nonce, 32) < 0)
 		{
 		memcpy (pkeptr +35, nonceap, 32);
@@ -1957,157 +2042,25 @@ if(keyver == 2)
 		memcpy (pkeptr +35, wpak->nonce, 32);
 		memcpy (pkeptr +67, nonceap, 32);
 		}
-	testptklen = 32;
-	mdctx = EVP_MD_CTX_new();
-	if(mdctx == 0) return false;
-	pkey = EVP_PKEY_new_mac_key(EVP_PKEY_HMAC, NULL, testpmk, 32);
-	if(pkey == NULL)
+	if(!EVP_MAC_init(ctxhmac, testpmk, 32, paramssha1)) return false;
+	if(!EVP_MAC_update(ctxhmac, pkedata, 100)) return false;
+	if(!EVP_MAC_final(ctxhmac, pkedata, NULL, 100)) return false;
+	if(keyver == 2)
 		{
-		EVP_MD_CTX_free(mdctx);
-		return false;
+		if(!EVP_MAC_init(ctxhmac, pkedata, 16, paramssha1)) return false;
+		if(!EVP_MAC_update(ctxhmac, eapoltmp, eapollen)) return false;
+		if(!EVP_MAC_final(ctxhmac, eapoltmp, NULL, eapollen)) return false;
 		}
-	if(EVP_DigestSignInit(mdctx, NULL, EVP_sha1(), NULL, pkey) != 1)
+	if(keyver == 1)
 		{
-		EVP_PKEY_free(pkey);
-		EVP_MD_CTX_free(mdctx);
-		return false;
+		if(!EVP_MAC_init(ctxhmac, pkedata, 16, paramsmd5)) return false;
+		if(!EVP_MAC_update(ctxhmac, eapoltmp, eapollen)) return false;
+		if(!EVP_MAC_final(ctxhmac, eapoltmp, NULL, eapollen)) return false;
 		}
-	if(EVP_DigestSignUpdate(mdctx, pkedata, 100) != 1)
-		{
-		EVP_PKEY_free(pkey);
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	if(EVP_DigestSignFinal(mdctx, testptk, &testptklen) <= 0)
-		{
-		EVP_PKEY_free(pkey);
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	EVP_PKEY_free(pkey);
-	EVP_MD_CTX_reset(mdctx);
-	testmiclen = 16;
-	pkey = EVP_PKEY_new_mac_key(EVP_PKEY_HMAC, NULL, testptk, 16);
-	if(pkey == NULL)
-		{
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	if(EVP_DigestSignInit(mdctx, NULL, EVP_sha1(), NULL, pkey) != 1)
-		{
-		EVP_PKEY_free(pkey);
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	if(EVP_DigestSignUpdate(mdctx, eapoldata, eapollen) != 1)
-		{
-		EVP_PKEY_free(pkey);
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	if(EVP_DigestSignFinal(mdctx, testmic, &testmiclen) <= 0)
-		{
-		EVP_PKEY_free(pkey);
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	EVP_PKEY_free(pkey);
-	EVP_MD_CTX_free(mdctx);
-	if(memcmp(&testmic, wpak->keymic, 16) == 0) return true;
-	}
-else if(keyver == 1)
-	{
-	memset(&pkedata, 0, sizeof(pkedata));
-	memset(&testptk, 0, sizeof(testptk));
-	memset(&testmic, 0, sizeof(testptk));
-	pkeptr = pkedata;
-	memcpy(pkeptr, "Pairwise key expansion", 23);
-	if(memcmp(macap, macsta, 6) < 0)
-		{
-		memcpy(pkeptr +23, macap, 6);
-		memcpy(pkeptr +29, macsta, 6);
-		}
-	else
-		{
-		memcpy(pkeptr +23, macsta, 6);
-		memcpy(pkeptr +29, macap, 6);
-		}
-
-	if(memcmp(nonceap, wpak->nonce, 32) < 0)
-		{
-		memcpy (pkeptr +35, nonceap, 32);
-		memcpy (pkeptr +67, wpak->nonce, 32);
-		}
-	else
-		{
-		memcpy (pkeptr +35, wpak->nonce, 32);
-		memcpy (pkeptr +67, nonceap, 32);
-		}
-	testptklen = 32;
-	mdctx = EVP_MD_CTX_new();
-	if(mdctx == 0) return false;
-	pkey = EVP_PKEY_new_mac_key(EVP_PKEY_HMAC, NULL, testpmk, 32);
-	if(pkey == NULL)
-		{
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	if(EVP_DigestSignInit(mdctx, NULL, EVP_sha1(), NULL, pkey) != 1)
-		{
-		EVP_PKEY_free(pkey);
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	if(EVP_DigestSignUpdate(mdctx, pkedata, 100) != 1)
-		{
-		EVP_PKEY_free(pkey);
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	if(EVP_DigestSignFinal(mdctx, testptk, &testptklen) <= 0)
-		{
-		EVP_PKEY_free(pkey);
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	EVP_PKEY_free(pkey);
-	EVP_MD_CTX_reset(mdctx);
-	testmiclen = 16;
-	mdctx = EVP_MD_CTX_new();
-	if(mdctx == 0) return false;
-	pkey = EVP_PKEY_new_mac_key(EVP_PKEY_HMAC, NULL, testptk, 16);
-	if(pkey == NULL)
-		{
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	if(EVP_DigestSignInit(mdctx, NULL,  EVP_md5(), NULL, pkey) != 1)
-		{
-		EVP_PKEY_free(pkey);
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	if(EVP_DigestSignUpdate(mdctx, eapoldata, eapollen) != 1)
-		{
-		EVP_PKEY_free(pkey);
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	if(EVP_DigestSignFinal(mdctx, testmic, &testmiclen) <= 0)
-		{
-		EVP_PKEY_free(pkey);
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	EVP_PKEY_free(pkey);
-	EVP_MD_CTX_free(mdctx);
-	if(memcmp(&testmic, wpak->keymic, 16) == 0) return true;
 	}
 else if(keyver == 3)
 	{
 	memset(&pkedata, 0, sizeof(pkedata));
-	memset(&testptk, 0, sizeof(testptk));
-	memset(&testmic, 0, sizeof(testptk));
 	pkedata[0] = 1;
 	pkedata[1] = 0;
 	pkeptr = pkedata +2;
@@ -2134,66 +2087,14 @@ else if(keyver == 3)
 		}
 	pkedata[100] = 0x80;
 	pkedata[101] = 1;
-	testptklen = 32;
-	mdctx = EVP_MD_CTX_new();
-	if(mdctx == 0) return false;
-	pkey = EVP_PKEY_new_mac_key(EVP_PKEY_HMAC, NULL, testpmk, 32);
-	if(pkey == NULL)
-		{
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	if(EVP_DigestSignInit(mdctx, NULL, EVP_sha256(), NULL, pkey) <= 0)
-		{
-		EVP_PKEY_free(pkey);
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	if(EVP_DigestSignUpdate(mdctx, pkedata, 102) <= 0)
-		{
-		EVP_PKEY_free(pkey);
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	if(EVP_DigestSignFinal(mdctx, testptk, &testptklen) <= 0)
-		{
-		EVP_PKEY_free(pkey);
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	EVP_PKEY_free(pkey);
-	EVP_MD_CTX_reset(mdctx);
-	testmiclen = 16;
-	mdctx = EVP_MD_CTX_new();
-	if(mdctx == 0) return false;
-	pkey = EVP_PKEY_new_CMAC_key(NULL, testptk, 16, EVP_aes_128_cbc());
-	if(pkey == NULL)
-		{
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	if(EVP_DigestSignInit(mdctx, NULL, NULL, NULL, pkey) != 1)
-		{
-		EVP_PKEY_free(pkey);
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	if(EVP_DigestSignUpdate(mdctx, eapoldata, eapollen) != 1)
-		{
-		EVP_PKEY_free(pkey);
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	if(EVP_DigestSignFinal(mdctx, testmic, &testmiclen) <= 0)
-		{
-		EVP_PKEY_free(pkey);
-		EVP_MD_CTX_free(mdctx);
-		return false;
-		}
-	EVP_PKEY_free(pkey);
-	EVP_MD_CTX_free(mdctx);
-	if(memcmp(&testmic, wpak->keymic, 16) == 0) return true;
+	if(!EVP_MAC_init(ctxhmac, testpmk, 32, paramssha256)) return false;
+	if(!EVP_MAC_update(ctxhmac, pkedata, 102)) return false;
+	if(!EVP_MAC_final(ctxhmac, pkedata, NULL, 102)) return false;
+	if(!EVP_MAC_init(ctxcmac, pkedata, 16, paramsaes128)) return false;
+	if(!EVP_MAC_update(ctxcmac, eapoltmp, eapollen)) return false;
+	if(!EVP_MAC_final(ctxcmac, eapoltmp, NULL, eapollen)) return false;
 	}
+if(memcmp(wpak->keymic, eapoltmp, 16) == 0) return true;
 return false;
 }
 /*===========================================================================*/
@@ -2203,6 +2104,7 @@ if(PKCS5_PBKDF2_HMAC_SHA1(zeroedpsk, 8, essid, essidlen, 4096, 32, calculatedpmk
 return true;
 }
 /*===========================================================================*/
+/*
 static void getnc(handshakelist_t *zeigerhsakt)
 {
 static handshakelist_t *zeigerhs, *zeigerhsold;
@@ -2219,6 +2121,7 @@ for(zeigerhs = zeigerhsakt; zeigerhs < handshakelistptr; zeigerhs++)
 	}
 return;
 }
+*/
 /*===========================================================================*/
 static handshakelist_t *gethandshake(maclist_t *zeigermac, handshakelist_t *zeigerhsakt)
 {
@@ -2231,34 +2134,50 @@ static uint8_t keyvertemp;
 static uint8_t eapoltemp[EAPOL_AUTHLEN_MAX];
 static hccapx_t hccapx;
 static hccap_t hccap;
+static time_t tvhs;
+
+static char timestringhs[32];
 
 zeigerhsold = NULL;
 for(zeigerhs = zeigerhsakt; zeigerhs < handshakelistptr; zeigerhs++)
 	{
+	tvhs = zeigerhs->timestamp /1000000000;
+	strftime(timestringhs, 32, "%d.%m.%Y %H:%M:%S", localtime(&tvhs));
 	if(donotcleanflag == false)
 		{
 		if(memcmp(&mac_broadcast, zeigerhs->client, 6) == 0) continue;
 		if(memcmp(&mac_broadcast, zeigerhs->ap, 6) == 0) continue;
 		if(zeigerhsold != NULL)
 			{
-			if((memcmp(zeigerhs->ap, zeigerhsold->ap, 6) == 0) && (memcmp(zeigerhs->client, zeigerhsold->client, 6) == 0))
-				{
-				if((zeigerhs->status &ST_APLESS) != ST_APLESS) getnc(zeigerhs);
-				continue;
-				}
+			if((memcmp(zeigerhs->ap, zeigerhsold->ap, 6) == 0) && (memcmp(zeigerhs->client, zeigerhsold->client, 6) == 0)) continue;
 			}
 		}
 	if(memcmp(zeigermac->addr, zeigerhs->ap, 6) == 0)
 		{
 		eapolmpbestcount++;
-		if((zeigerhs->status &ST_APLESS) != ST_APLESS) getnc(zeigerhs);
 		if((zeigerhs->status &ST_APLESS) == ST_APLESS) eapolaplesscount++;
 		if((zeigerhs->status &7) == ST_M12E2) eapolm12e2count++;
 		if((zeigerhs->status &7) == ST_M14E4) eapolm14e4count++;
 		if((zeigerhs->status &7) == ST_M32E2) eapolm32e2count++;
-		if((zeigerhs->status &7) == ST_M32E3) eapolm32e3count++;
-		if((zeigerhs->status &7) == ST_M34E3) eapolm34e3count++;
+		if((zeigerhs->status &7) == ST_M32E3)
+			{
+			zeigerhs->status = (zeigerhs->status & 0x07) + 0x10;
+			eapolm32e3count++;
+			}
+		if((zeigerhs->status &7) == ST_M34E3)
+			{
+			zeigerhs->status = (zeigerhs->status & 0x07) + 0x10;
+			eapolm34e3count++;
+			}
 		if((zeigerhs->status &7) == ST_M34E4) eapolm34e4count++;
+		if((zeigerhs->status & ST_ENDIANESS) != 0)
+			{
+			zeigerhs->status |= 0x80;
+//			zeigerhs->status &= ~(1 << 7);
+			}
+		if((ncvalue > 0) && ((zeigerhs->status & 0x10) == 0)) zeigerhs->status |= 0x80;
+
+
 		wpak = (wpakey_t*)(zeigerhs->eapol +EAPAUTH_SIZE);
 		keyvertemp = ntohs(wpak->keyinfo) & WPA_KEY_INFO_TYPE_MASK;
 		memcpy(&eapoltemp, zeigerhs->eapol, zeigerhs->eapauthlen);
@@ -2293,9 +2212,10 @@ for(zeigerhs = zeigerhsakt; zeigerhs < handshakelistptr; zeigerhs++)
 				zeigerhs->anonce[16], zeigerhs->anonce[17], zeigerhs->anonce[18], zeigerhs->anonce[19], zeigerhs->anonce[20], zeigerhs->anonce[21], zeigerhs->anonce[22], zeigerhs->anonce[23],
 				zeigerhs->anonce[24], zeigerhs->anonce[25], zeigerhs->anonce[26], zeigerhs->anonce[27], zeigerhs->anonce[28], zeigerhs->anonce[29], zeigerhs->anonce[30], zeigerhs->anonce[31]);
 			for(p = 0; p < zeigerhs->eapauthlen; p++) fprintf(fh_pmkideapol, "%02x", eapoltemp[p]);
-			fprintf(fh_pmkideapol, "*%02x\n", zeigerhs->status);
+			if(addtimestampflag == false) fprintf(fh_pmkideapol, "*%02x\n", zeigerhs->status);
+			else fprintf(fh_pmkideapol, "*%02x\t%s\t%" PRIu64 "\n", zeigerhs->status, timestringhs, zeigerhs->timestampgap);
 			if(zeigerhs->rcgap == 0) eapolwrittencount++;
-			else  eapolncwrittencount++;
+			else eapolncwrittencount++;
 			}
 		if((fh_pmkideapoljtrdeprecated != 0) && (zeigerhs->rcgap == 0))
 			{
@@ -2384,10 +2304,18 @@ static pmkidlist_t *getpmkid(maclist_t *zeigermac, pmkidlist_t *zeigerpmkidakt)
 {
 static int p;
 static pmkidlist_t *zeigerpmkid, *zeigerpmkidold;
+static time_t tvhs;
+static char timestringhs[32];
 
 zeigerpmkidold = NULL;
 for(zeigerpmkid = zeigerpmkidakt; zeigerpmkid < pmkidlistptr; zeigerpmkid++)
 	{
+	tvhs = zeigerpmkid->timestamp /1000000000;
+	strftime(timestringhs, 32, "%d.%m.%Y %H:%M:%S", localtime(&tvhs));
+	if(((zeigerpmkid->status &PMKID_APPSK256) == PMKID_APPSK256) && ((zeigermac->akm &TAK_PSKSHA256) != TAK_PSKSHA256))
+		{
+		if(ignoreieflag == false) continue;
+		}
 	if(donotcleanflag == false)
 		{
 		if(memcmp(&mac_broadcast, zeigerpmkid->client, 6) == 0) continue;
@@ -2422,8 +2350,23 @@ for(zeigerpmkid = zeigerpmkidakt; zeigerpmkid < pmkidlistptr; zeigerpmkid++)
 				zeigerpmkid->ap[0], zeigerpmkid->ap[1], zeigerpmkid->ap[2], zeigerpmkid->ap[3], zeigerpmkid->ap[4], zeigerpmkid->ap[5],
 				zeigerpmkid->client[0], zeigerpmkid->client[1], zeigerpmkid->client[2], zeigerpmkid->client[3], zeigerpmkid->client[4], zeigerpmkid->client[5]);
 			for(p = 0; p < zeigermac->essidlen; p++) fprintf(fh_pmkideapol, "%02x", zeigermac->essid[p]);
-			fprintf(fh_pmkideapol, "***\n");
+			if(addtimestampflag == false) fprintf(fh_pmkideapol, "***%02x\n", zeigerpmkid->status);
+			else fprintf(fh_pmkideapol, "***%02x\t%s\n",  zeigerpmkid->status, timestringhs);
 			pmkidwrittenhcount++;
+			}
+		if((fh_pmkideapolclient != 0) && ((zeigerpmkid->status & PMKID_CLIENT) == PMKID_CLIENT))
+			{
+			//WPA*TYPE*PMKID-ODER-MIC*MACAP*MACSTA*ESSID_HEX*ANONCE*EAPOL*MP
+			fprintf(fh_pmkideapolclient, "WPA*%02d*%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x*%02x%02x%02x%02x%02x%02x*%02x%02x%02x%02x%02x%02x*",
+				HCX_TYPE_PMKID,
+				zeigerpmkid->pmkid[0], zeigerpmkid->pmkid[1], zeigerpmkid->pmkid[2], zeigerpmkid->pmkid[3], zeigerpmkid->pmkid[4], zeigerpmkid->pmkid[5], zeigerpmkid->pmkid[6], zeigerpmkid->pmkid[7],
+				zeigerpmkid->pmkid[8], zeigerpmkid->pmkid[9], zeigerpmkid->pmkid[10], zeigerpmkid->pmkid[11], zeigerpmkid->pmkid[12], zeigerpmkid->pmkid[13], zeigerpmkid->pmkid[14], zeigerpmkid->pmkid[15],
+				zeigerpmkid->ap[0], zeigerpmkid->ap[1], zeigerpmkid->ap[2], zeigerpmkid->ap[3], zeigerpmkid->ap[4], zeigerpmkid->ap[5],
+				zeigerpmkid->client[0], zeigerpmkid->client[1], zeigerpmkid->client[2], zeigerpmkid->client[3], zeigerpmkid->client[4], zeigerpmkid->client[5]);
+			for(p = 0; p < zeigermac->essidlen; p++) fprintf(fh_pmkideapolclient, "%02x", zeigermac->essid[p]);
+			if(addtimestampflag == false) fprintf(fh_pmkideapolclient, "***%02x\n",  zeigerpmkid->status & PMKID_CLIENT);
+			else fprintf(fh_pmkideapolclient, "***%02x\t%s\n",  zeigerpmkid->status, timestringhs);
+			pmkidclientwrittenhcount++;
 			}
 		if(fh_pmkideapoljtrdeprecated != 0)
 			{
@@ -2458,7 +2401,7 @@ for(zeigerpmkid = zeigerpmkidakt; zeigerpmkid < pmkidlistptr; zeigerpmkid++)
 return zeigerpmkidakt;
 }
 /*===========================================================================*/
-static void outputwpalists()
+static void outputwpalists(void)
 {
 static maclist_t *zeigermac, *zeigermacold;
 static handshakelist_t *zeigerhsakt;
@@ -2468,11 +2411,13 @@ static int essiddupecount;
 qsort(aplist, aplistptr -aplist, MACLIST_SIZE, sort_maclist_by_mac_count);
 qsort(pmkidlist, pmkidlistptr -pmkidlist, PMKIDLIST_SIZE, sort_pmkidlist_by_mac);
 if(ncvalue == 0) qsort(handshakelist, handshakelistptr -handshakelist, HANDSHAKELIST_SIZE, sort_handshakelist_by_timegap);
-else  qsort(handshakelist, handshakelistptr -handshakelist, HANDSHAKELIST_SIZE, sort_handshakelist_by_rcgap);
+else qsort(handshakelist, handshakelistptr -handshakelist, HANDSHAKELIST_SIZE, sort_handshakelist_by_rcgap);
+
 zeigerhsakt = handshakelist;
 zeigerpmkidakt = pmkidlist;
 zeigermacold = aplist;
-if(zeigermacold->type == AP)
+
+if((zeigermacold->type & AP) == AP)
 	{
 	if(zeigermacold->essidlen != 0)
 		{
@@ -2495,12 +2440,12 @@ essiddupecount = 0;
 for(zeigermac = aplist +1; zeigermac < aplistptr; zeigermac++)
 	{
 	if(zeigermac->essidlen == 0) continue;
-	if(zeigermac->type != AP)
+	if((zeigermac->type & AP) != AP)
 		{
 		essiddupecount = 0;
 		continue;
 		}
-	if(zeigermacold->type == AP)
+	if((zeigermacold->type & AP) == AP)
 		{
 		if(memcmp(zeigermacold->addr, zeigermac->addr, 6) == 0)
 			{
@@ -2528,7 +2473,7 @@ for(zeigermac = aplist +1; zeigermac < aplistptr; zeigermac++)
 return;
 }
 /*===========================================================================*/
-static void cleanupmac()
+static void cleanupmac(void)
 {
 static maclist_t *zeiger;
 static maclist_t *zeigerold;
@@ -2571,7 +2516,7 @@ for(zeiger = aplist +1; zeiger < aplistptr; zeiger++)
 					memcpy(zeigerold->devicename, zeiger->devicename, zeiger->devicenamelen);
 					zeigerold->devicenamelen = zeiger->devicenamelen;
 					}
-				if(zeigerold->enrolleelen == 0) 
+				if(zeigerold->enrolleelen == 0)
 					{
 					memcpy(zeigerold->enrollee, zeiger->enrollee, zeiger->enrolleelen);
 					zeigerold->enrolleelen = zeiger->enrolleelen;
@@ -2586,13 +2531,14 @@ for(zeiger = aplist +1; zeiger < aplistptr; zeiger++)
 return;
 }
 /*===========================================================================*/
-static bool cleanbackhandshake()
+static bool cleanbackhandshake(void)
 {
 static int c;
 static handshakelist_t *zeiger;
+return false;
 
 if(donotcleanflag == true) return false;
-zeiger = handshakelistptr;
+
 for(c = 0; c < 20; c ++)
 	{
 	zeiger--;
@@ -2607,6 +2553,7 @@ for(c = 0; c < 20; c ++)
 	if(zeiger->status < handshakelistptr->status) zeiger->status = handshakelistptr->status;
 	zeiger->messageap |= handshakelistptr->messageap;
 	zeiger->messageclient |= handshakelistptr->messageclient;
+	zeiger->timestamp |= handshakelistptr->timestamp;
 	return true;
 	}
 return false;
@@ -2633,7 +2580,7 @@ if(testeapolpmk(zeroedpmk, keyver, msgclient->client, msgap->ap, msgap->nonce, m
 	{
 	if(handshakelistptr >= handshakelist +handshakelistmax)
 		{
-		handshakelistnew = realloc(handshakelist, (handshakelistmax +HANDSHAKELIST_MAX) *HANDSHAKELIST_SIZE);
+		handshakelistnew = (handshakelist_t*)realloc(handshakelist, (handshakelistmax +HANDSHAKELIST_MAX) *HANDSHAKELIST_SIZE);
 		if(handshakelistnew == NULL)
 			{
 			fprintf(stderr, "failed to allocate memory for internal list\n");
@@ -2647,15 +2594,28 @@ if(testeapolpmk(zeroedpmk, keyver, msgclient->client, msgap->ap, msgap->nonce, m
 	handshakelistptr->timestampgap = eaptimegap;
 	handshakelistptr->status = mpfield;
 	handshakelistptr->rcgap = rcgap;
-	if(handshakelistptr->rcgap > 0) handshakelistptr->status |= ST_NC;
+	if(handshakelistptr->rcgap > 0)
+		{
+		if((handshakelistptr->status & ST_ENDIANESS) == 0) handshakelistptr->status |= ST_NC;
+		}
 	handshakelistptr->messageap = msgap->message;
 	handshakelistptr->messageclient = msgclient->message;
 	memcpy(handshakelistptr->ap, msgap->ap, 6);
 	memcpy(handshakelistptr->client, msgclient->client, 6);
-	memcpy(handshakelistptr->anonce, msgap->nonce, 32);
 	memcpy(handshakelistptr->pmkid, msgap->pmkid, 32);
-	handshakelistptr->eapauthlen = msgclient->eapauthlen;
-	memcpy(handshakelistptr->eapol, msgclient->eapol, msgclient->eapauthlen);
+	if((msgap->eapauthlen != 0) && (((mpfield &ST_M32E3) == ST_M32E3) || ((mpfield &ST_M34E3) == ST_M34E3)))
+		{
+		memcpy(handshakelistptr->anonce, msgclient->nonce, 32);
+		handshakelistptr->eapauthlen = msgap->eapauthlen;
+		memcpy(handshakelistptr->eapol, msgap->eapol, msgap->eapauthlen);
+		}
+	else
+		{
+		memcpy(handshakelistptr->anonce, msgap->nonce, 32);
+		handshakelistptr->eapauthlen = msgclient->eapauthlen;
+		memcpy(handshakelistptr->eapol, msgclient->eapol, msgclient->eapauthlen);
+		}
+	handshakelistptr->timestamp = msgclient->timestamp;
 	if(cleanbackhandshake() == false) handshakelistptr++;
 	}
 else
@@ -2665,7 +2625,7 @@ else
 		{
 		if(handshakelistptr >= handshakelist +handshakelistmax)
 			{
-			handshakelistnew = realloc(handshakelist, (handshakelistmax +HANDSHAKELIST_MAX) *HANDSHAKELIST_SIZE);
+			handshakelistnew = (handshakelist_t*)realloc(handshakelist, (handshakelistmax +HANDSHAKELIST_MAX) *HANDSHAKELIST_SIZE);
 			if(handshakelistnew == NULL)
 				{
 				fprintf(stderr, "failed to allocate memory for internal list\n");
@@ -2679,22 +2639,36 @@ else
 		handshakelistptr->timestampgap = eaptimegap;
 		handshakelistptr->status = mpfield;
 		handshakelistptr->rcgap = rcgap;
-		if(handshakelistptr->rcgap > 0) handshakelistptr->status |= ST_NC;
+		if(handshakelistptr->rcgap > 0)
+			{
+			if((handshakelistptr->status & ST_ENDIANESS) == 0) handshakelistptr->status |= ST_NC;
+			}
 		handshakelistptr->messageap = msgap->message;
 		handshakelistptr->messageclient = msgclient->message;
 		memcpy(handshakelistptr->ap, msgap->ap, 6);
 		memcpy(handshakelistptr->client, msgclient->client, 6);
 		memcpy(handshakelistptr->anonce, msgap->nonce, 32);
 		memcpy(handshakelistptr->pmkid, msgap->pmkid, 32);
-		handshakelistptr->eapauthlen = msgclient->eapauthlen;
-		memcpy(handshakelistptr->eapol, msgclient->eapol, msgclient->eapauthlen);
+		if(mpfield != ST_M32E3)
+			{
+			memcpy(handshakelistptr->anonce, msgap->nonce, 32);
+			handshakelistptr->eapauthlen = msgclient->eapauthlen;
+			memcpy(handshakelistptr->eapol, msgclient->eapol, msgclient->eapauthlen);
+			}
+		else if(msgap->eapauthlen != 0)
+			{
+			memcpy(handshakelistptr->anonce, msgclient->nonce, 32);
+			handshakelistptr->eapauthlen = msgap->eapauthlen;
+			memcpy(handshakelistptr->eapol, msgap->eapol, msgap->eapauthlen);
+			}
+		handshakelistptr->timestamp = msgclient->timestamp;
 		if(cleanbackhandshake() == false) handshakelistptr++;
 		}
 	}
 return;
 }
 /*===========================================================================*/
-static bool cleanbackpmkid()
+static bool cleanbackpmkid(void)
 {
 static int c;
 static pmkidlist_t *zeiger;
@@ -2708,21 +2682,26 @@ for(c = 0; c < 20; c ++)
 	if(memcmp(zeiger->ap, pmkidlistptr->ap, 6) != 0) continue;
 	if(memcmp(zeiger->client, pmkidlistptr->client, 6) != 0) continue;
 	if(memcmp(zeiger->pmkid, pmkidlistptr->pmkid, 16) != 0) continue;
+	zeiger->status |= pmkidlistptr->status;
 	return true;
 	}
 return false;
 }
 /*===========================================================================*/
-static void addpmkid(uint8_t *macclient, uint8_t *macap, uint8_t *pmkid)
+static void addpmkid(uint64_t timestamp, uint8_t *macclient, uint8_t *macap, uint8_t *pmkid, uint8_t pmkidstatus)
 {
 static pmkidlist_t *pmkidlistnew;
 
 pmkidcount++;
+if((pmkidstatus & PMKID_CLIENT) == PMKID_CLIENT)
+	{
+	if(testfaultypmkid(pmkid) == true) return;
+	}
 if(testpmkid(zeroedpmk, macclient, macap, pmkid) == false)
 	{
 	if(pmkidlistptr >= pmkidlist +pmkidlistmax)
 		{
-		pmkidlistnew = realloc(pmkidlist, (pmkidlistmax +PMKIDLIST_MAX) *PMKIDLIST_SIZE);
+		pmkidlistnew = (pmkidlist_t*)realloc(pmkidlist, (pmkidlistmax +PMKIDLIST_MAX) *PMKIDLIST_SIZE);
 		if(pmkidlistnew == NULL)
 			{
 			fprintf(stderr, "failed to allocate memory for internal list\n");
@@ -2736,6 +2715,8 @@ if(testpmkid(zeroedpmk, macclient, macap, pmkid) == false)
 	memcpy(pmkidlistptr->ap, macap, 6);
 	memcpy(pmkidlistptr->client, macclient, 6);
 	memcpy(pmkidlistptr->pmkid, pmkid, 16);
+	pmkidlistptr->timestamp = timestamp;
+	pmkidlistptr->status |= pmkidstatus;
 	if(cleanbackpmkid() == false) pmkidlistptr++;
 	}
 else
@@ -2745,7 +2726,7 @@ else
 		{
 		if(pmkidlistptr >= pmkidlist +pmkidlistmax)
 			{
-			pmkidlistnew = realloc(pmkidlist, (pmkidlistmax +PMKIDLIST_MAX) *PMKIDLIST_SIZE);
+			pmkidlistnew = (pmkidlist_t*)realloc(pmkidlist, (pmkidlistmax +PMKIDLIST_MAX) *PMKIDLIST_SIZE);
 			if(pmkidlistnew == NULL)
 				{
 				fprintf(stderr, "failed to allocate memory for internal list\n");
@@ -2759,6 +2740,7 @@ else
 		memcpy(pmkidlistptr->ap, macap, 6);
 		memcpy(pmkidlistptr->client, macclient, 6);
 		memcpy(pmkidlistptr->pmkid, pmkid, 16);
+		pmkidlistptr->status |= pmkidstatus;
 		if(cleanbackpmkid() == false) pmkidlistptr++;
 		}
 	}
@@ -2774,7 +2756,7 @@ static uint32_t exteaplen;
 static uint32_t idstrlen;
 
 eapcount++;
-if(restlen < (int)EAPAUTH_SIZE) return; 
+if(restlen < (int)EAPAUTH_SIZE) return;
 eapauth = (eapauth_t*)eapptr;
 authlen = ntohs(eapauth->len);
 if(authlen > restlen) return;
@@ -2908,7 +2890,7 @@ wpatype = byte_swap_16(wpaptr->type);
 #endif
 if(wpatype != VT_WPA_IE) return false;
 zeiger->kdversion |= KV_WPAIE;
-gsuiteptr = (suite_t*)ieptr; 
+gsuiteptr = (suite_t*)ieptr;
 if(memcmp(gsuiteptr->oui, &ouimscorp, 3) == 0)
 	{
 	if(gsuiteptr->type == CS_WEP40) zeiger->groupcipher |= TCS_WEP40;
@@ -2936,7 +2918,7 @@ if(csuitecount *4 > wpalen)
 	}
 for(c = 0; c < csuitecount; c++)
 	{
-	csuiteptr = (suite_t*)ieptr; 
+	csuiteptr = (suite_t*)ieptr;
 	if(memcmp(csuiteptr->oui, &ouimscorp, 3) == 0)
 		{
 		if(csuiteptr->type == CS_WEP40) zeiger->cipher |= TCS_WEP40;
@@ -2967,7 +2949,7 @@ if(asuitecount *4 > wpalen)
 	}
 for(c = 0; c < asuitecount; c++)
 	{
-	asuiteptr = (suite_t*)ieptr; 
+	asuiteptr = (suite_t*)ieptr;
 	if(memcmp(asuiteptr->oui, &ouimscorp, 3) == 0)
 		{
 		if(asuiteptr->type == AK_PMKSA) zeiger->akm |= TAK_PMKSA;
@@ -3034,7 +3016,7 @@ static int csuitecount;
 static suitecount_t *asuitecountptr;
 static suite_t *asuiteptr;
 static int asuitecount;
-static rsnpmkidlist_t *rsnpmkidlistptr; 
+static rsnpmkidlist_t *rsnpmkidlistptr;
 static int rsnpmkidcount;
 
 static const uint8_t foxtrott[4] = { 0xff, 0xff, 0xff, 0xff };
@@ -3049,7 +3031,7 @@ if(rsnver != 1) return true;
 zeiger->kdversion |= KV_RSNIE;
 rsnlen -= RSNIE_SIZE;
 ieptr += RSNIE_SIZE;
-gsuiteptr = (suite_t*)ieptr; 
+gsuiteptr = (suite_t*)ieptr;
 if(memcmp(gsuiteptr->oui, &suiteoui, 3) == 0)
 	{
 	if(gsuiteptr->type == CS_WEP40) zeiger->groupcipher |= TCS_WEP40;
@@ -3078,7 +3060,7 @@ if(csuitecount *4 > rsnlen)
 	}
 for(c = 0; c < csuitecount; c++)
 	{
-	csuiteptr = (suite_t*)ieptr; 
+	csuiteptr = (suite_t*)ieptr;
 	if(memcmp(csuiteptr->oui, &suiteoui, 3) == 0)
 		{
 		if(csuiteptr->type == CS_WEP40) zeiger->cipher |= TCS_WEP40;
@@ -3110,7 +3092,7 @@ if(asuitecount *4 > rsnlen)
 	}
 for(c = 0; c < asuitecount; c++)
 	{
-	asuiteptr = (suite_t*)ieptr; 
+	asuiteptr = (suite_t*)ieptr;
 	if(memcmp(asuiteptr->oui, &suiteoui, 3) == 0)
 		{
 		if(asuiteptr->type == AK_PMKSA) zeiger->akm |= TAK_PMKSA;
@@ -3133,7 +3115,7 @@ for(c = 0; c < asuitecount; c++)
 rsnlen -= RSNCAPABILITIES_SIZE;
 ieptr += RSNCAPABILITIES_SIZE;
 if(rsnlen <= 0) return true;
-rsnpmkidlistptr = (rsnpmkidlist_t*)ieptr; 
+rsnpmkidlistptr = (rsnpmkidlist_t*)ieptr;
 #ifndef BIG_ENDIAN_HOST
 rsnpmkidcount = rsnpmkidlistptr->count;
 #else
@@ -3188,8 +3170,12 @@ return true;
 static bool gettags(int infolen, uint8_t *infoptr, tags_t *zeiger)
 {
 static ietag_t *tagptr;
+static uint8_t tagok;
+static bool ef;
 
 memset(zeiger, 0, TAGS_SIZE);
+ef = false;
+tagok = 0;
 while(0 < infolen)
 	{
 	if(infolen == 4) return true;
@@ -3200,61 +3186,93 @@ while(0 < infolen)
 		infolen -= tagptr->len +IETAG_SIZE;
 		continue;
 		}
-	if(tagptr->len > infolen) return false;
+	if(tagptr->len > infolen)
+		{
+		taglenerrorcount++;
+		return false;
+		}
 	if(tagptr->id == TAG_SSID)
 		{
-		if(tagptr->len > ESSID_LEN_MAX)
+		if((tagok & TAG_SSID_OK) == 0)
 			{
-			taglenerrorcount++;
-			return false;
-			}
-		if(isessidvalid(tagptr->len, &tagptr->data[0]) == false) return false;
-			{
-			memcpy(zeiger->essid, &tagptr->data[0], tagptr->len);
-			zeiger->essidlen = tagptr->len;
+			if(tagptr->len > ESSID_LEN_MAX)
+				{
+				taglenerrorcount++;
+				return false;
+				}
+			if(isessidvalid(tagptr->len, &tagptr->data[0]) == false) return false;
+				{
+				ef = true;
+				memcpy(zeiger->essid, &tagptr->data[0], tagptr->len);
+				zeiger->essidlen = tagptr->len;
+				}
+			tagok |= TAG_SSID_OK;
 			}
 		}
 	else if(tagptr->id == TAG_CHAN)
 		{
-		if(tagptr->len == 1) zeiger->channel = tagptr->data[0];
+		if((tagok & TAG_CHAN_OK) == 0)
+			{
+			if(tagptr->len == 1)
+				{
+				zeiger->channel = tagptr->data[0];
+				tagok |= TAG_CHAN_OK;
+				}
+			}
 		}
 	else if(tagptr->id == TAG_COUNTRY)
 		{
 		if(tagptr->len > 2)
 			{
-			zeiger->country[0] = tagptr->data[0];
-			zeiger->country[1] = tagptr->data[1];
+			if((tagok & TAG_COUNTRY_OK) == 0)
+				{
+				zeiger->country[0] = tagptr->data[0];
+				zeiger->country[1] = tagptr->data[1];
+				tagok |= TAG_COUNTRY_OK;
+				}
 			}
 		}
 	else if(tagptr->id == TAG_RSN)
 		{
 		if(tagptr->len >= RSNIE_LEN_MIN)
 			{
-			if(gettagrsn(tagptr->len, tagptr->data, zeiger) == false) return false;
+			if(gettagrsn(tagptr->len, tagptr->data, zeiger) == false)
+				{
+				taglenerrorcount++;
+				return false;
+				}
 			}
 		}
 	else if(tagptr->id == TAG_VENDOR)
 		{
 		if(tagptr->len >= VENDORIE_SIZE)
 			{
-			if(gettagvendor(tagptr->len, tagptr->data, zeiger) == false) return false;
+			if(gettagvendor(tagptr->len, tagptr->data, zeiger) == false)
+				{
+				taglenerrorcount++;
+				return false;
+				}
 			}
 		}
 	infoptr += tagptr->len +IETAG_SIZE;
 	infolen -= tagptr->len +IETAG_SIZE;
 	}
-if((infolen != 0) && (infolen != 4)) return false;
+if((infolen != 0) && (infolen != 4) && (ef == false))
+	{
+	taglenerrorcount++;
+	return false;
+	}
 return true;
 }
 /*===========================================================================*/
-static void process80211eapol_m4(uint64_t eaptimestamp, uint8_t *macap, uint8_t *macclient, uint32_t restlen, uint8_t *eapauthptr)
+static void process80211eapol_m4(uint64_t eaptimestamp, uint8_t *macap, uint8_t *macclient, uint8_t *macsrc, uint32_t restlen, uint8_t *eapauthptr)
 {
 static int c;
 static messagelist_t *zeiger;
 static uint8_t *wpakptr;
 static wpakey_t *wpak;
 static eapauth_t *eapauth;
-static uint32_t authlen;
+static uint16_t authlen;
 static uint64_t eaptimegap;
 static uint8_t keyver;
 static uint64_t rc;
@@ -3262,12 +3280,23 @@ static uint64_t rcgap;
 static uint8_t mpfield;
 
 static const uint8_t foxtrott[4] = { 0xff, 0xff, 0xff, 0xff };
+
 eapolm4count++;
 eapolmsgcount++;
+if(memcmp(macap, macsrc, 6) != 0)
+	{
+	eapolrelayedcount++;
+	return;
+	}
 eapauth = (eapauth_t*)eapauthptr;
 authlen = ntohs(eapauth->len);
+if(authlen == 0) return;
 if(authlen +EAPAUTH_SIZE > restlen) return;
-if(authlen +EAPAUTH_SIZE > EAPOL_AUTHLEN_MAX) return;
+if((authlen +EAPAUTH_SIZE) > EAPOL_AUTHLEN_MAX)
+	{
+	eapolm4oversizedcount++;
+	return;
+	}
 wpakptr = eapauthptr +EAPAUTH_SIZE;
 wpak = (wpakey_t*)wpakptr;
 keyver = ntohs(wpak->keyinfo) & WPA_KEY_INFO_TYPE_MASK;
@@ -3314,9 +3343,13 @@ if(memcmp(&zeroed32, wpak->keyid, 8) != 0)
 	eapolm4errorcount++;
 	return;
 	}
-if(memcmp(&zeroed32, wpak->nonce, 32) == 0) return;
-if((memcmp(&fakenonce1, wpak->nonce, 32) == 0) && (rc == 17)) return; 
-if((memcmp(&fakenonce2, wpak->nonce, 32) == 0) && (rc == 17)) return; 
+if(memcmp(&zeroed32, wpak->nonce, 32) == 0)
+	{
+	eapolm4zeroedcount++;
+	return;
+	}
+if((memcmp(&fakenonce1, wpak->nonce, 32) == 0) && (rc == 17)) return;
+if((memcmp(&fakenonce2, wpak->nonce, 32) == 0) && (rc == 17)) return;
 zeiger = messagelist +MESSAGELIST_MAX;
 memset(zeiger, 0, MESSAGELIST_SIZE);
 zeiger->timestamp = eaptimestamp;
@@ -3326,10 +3359,15 @@ memcpy(zeiger->ap, macap, 6);
 zeiger->message = HS_M4;
 zeiger->rc = rc;
 memcpy(zeiger->nonce, wpak->nonce, 32);
-zeiger->eapauthlen = authlen +EAPAUTH_SIZE;
-memcpy(zeiger->eapol, eapauthptr, zeiger->eapauthlen);
+if((authlen +EAPAUTH_SIZE) <= EAPOL_AUTHLEN_MAX)
+	{
+	zeiger->eapauthlen = authlen +EAPAUTH_SIZE;
+	memcpy(zeiger->eapol, eapauthptr, zeiger->eapauthlen);
+	}
+mpfield = 0;
 for(zeiger = messagelist; zeiger < messagelist +MESSAGELIST_MAX; zeiger++)
 	{
+	if(zeiger->timestamp == 0) break;
 	if((zeiger->message &HS_M3) == HS_M3)
 		{
 		if(memcmp(zeiger->client, macclient, 6) != 0) continue;
@@ -3340,9 +3378,17 @@ for(zeiger = messagelist; zeiger < messagelist +MESSAGELIST_MAX; zeiger++)
 		if(rcgap > ncvalue) continue;
 		if(eaptimestamp > zeiger->timestamp) eaptimegap = eaptimestamp -zeiger->timestamp;
 		else eaptimegap = zeiger->timestamp -eaptimestamp;
-		mpfield = ST_M34E4;
-		if(eaptimegap > eaptimegapmax) eaptimegapmax = eaptimegap; 
-		if(eaptimegap <= eapoltimeoutvalue) addhandshake(eaptimegap, rcgap, messagelist +MESSAGELIST_MAX, zeiger, keyver, mpfield);
+		if((authlen +EAPAUTH_SIZE) <= EAPOL_AUTHLEN_MAX)
+			{
+			mpfield = ST_M34E4;
+			if(eaptimegap > eaptimegapmax) eaptimegapmax = eaptimegap;
+			if(eaptimegap <= eapoltimeoutvalue) addhandshake(eaptimegap, rcgap, messagelist +MESSAGELIST_MAX, zeiger, keyver, mpfield);
+			if(donotcleanflag == true)
+				{
+				mpfield = ST_M34E3;
+				if(eaptimegap <= eapoltimeoutvalue) addhandshake(eaptimegap, rcgap, messagelist +MESSAGELIST_MAX, zeiger, keyver, mpfield);
+				}
+			}
 		}
 	if((zeiger->message &HS_M1) != HS_M1) continue;
 	if(memcmp(zeiger->client, macclient, 6) != 0) continue;
@@ -3356,19 +3402,22 @@ for(zeiger = messagelist; zeiger < messagelist +MESSAGELIST_MAX; zeiger++)
 	if(rcgap > ncvalue) continue;
 	if(eaptimestamp > zeiger->timestamp) eaptimegap = eaptimestamp -zeiger->timestamp;
 	else eaptimegap = zeiger->timestamp -eaptimestamp;
-	mpfield = ST_M14E4;
-	if(myaktreplaycount > 0)
+	if((authlen +EAPAUTH_SIZE) <= EAPOL_AUTHLEN_MAX)
 		{
-		if(zeiger->rc == myaktreplaycount) continue;
+		mpfield = ST_M14E4;
+		if(myaktreplaycount > 0)
+			{
+			if(zeiger->rc == myaktreplaycount) continue;
+			}
+		if(eaptimegap > eaptimegapmax) eaptimegapmax = eaptimegap;
+		if(eaptimegap <= eapoltimeoutvalue) addhandshake(eaptimegap, rcgap, messagelist +MESSAGELIST_MAX, zeiger, keyver, mpfield);
 		}
-	if(eaptimegap > eaptimegapmax) eaptimegapmax = eaptimegap; 
-	if(eaptimegap <= eapoltimeoutvalue) addhandshake(eaptimegap, rcgap, messagelist +MESSAGELIST_MAX, zeiger, keyver, mpfield);
 	}
-qsort(messagelist, MESSAGELIST_MAX +1, MESSAGELIST_SIZE, sort_messagelist_by_epcount);
+qsort(messagelist, MESSAGELIST_MAX +1, MESSAGELIST_SIZE, sort_messagelist_by_timestamp);
 return;
 }
 /*===========================================================================*/
-static void process80211eapol_m3(uint64_t eaptimestamp, uint8_t *macclient, uint8_t *macap, uint32_t restlen, uint8_t *eapauthptr)
+static void process80211eapol_m3(uint64_t eaptimestamp, uint8_t *macclient, uint8_t *macap, uint8_t *macsrc, uint32_t restlen, uint8_t *eapauthptr)
 {
 static int c;
 static messagelist_t *zeiger;
@@ -3376,7 +3425,7 @@ static messagelist_t *zeigerakt;
 static uint8_t *wpakptr;
 static wpakey_t *wpak;
 static eapauth_t *eapauth;
-static uint32_t authlen;
+static uint16_t authlen;
 static uint64_t eaptimegap;
 static uint8_t keyver;
 static uint64_t rc;
@@ -3387,10 +3436,21 @@ static const uint8_t foxtrott[4] = { 0xff, 0xff, 0xff, 0xff };
 
 eapolm3count++;
 eapolmsgcount++;
+if(memcmp(macap, macsrc, 6) != 0)
+	{
+	eapolrelayedcount++;
+	return;
+	}
 zeigerakt = messagelist +MESSAGELIST_MAX;
 eapauth = (eapauth_t*)eapauthptr;
 authlen = ntohs(eapauth->len);
+if(authlen == 0) return;
 if(authlen > restlen) return;
+if((authlen +EAPAUTH_SIZE) > EAPOL_AUTHLEN_MAX)
+	{
+	eapolm3oversizedcount++;
+	return;
+	}
 wpakptr = eapauthptr +EAPAUTH_SIZE;
 wpak = (wpakey_t*)wpakptr;
 keyver = ntohs(wpak->keyinfo) & WPA_KEY_INFO_TYPE_MASK;
@@ -3445,19 +3505,38 @@ memcpy(zeigerakt->ap, macap, 6);
 zeigerakt->message = HS_M3;
 zeigerakt->rc = rc;
 memcpy(zeigerakt->nonce, wpak->nonce, 32);
+if((authlen +EAPAUTH_SIZE) <= EAPOL_AUTHLEN_MAX)
+	{
+	zeigerakt->eapauthlen = authlen +EAPAUTH_SIZE;
+	memcpy(zeigerakt->eapol, eapauthptr, zeigerakt->eapauthlen);
+	}
 for(zeiger = messagelist; zeiger < messagelist +MESSAGELIST_MAX; zeiger++)
 	{
+	if(zeiger->timestamp == 0) break;
 	if(((zeiger->message &HS_M1) == HS_M1) || ((zeiger->message &HS_M3) == HS_M3))
 		{
-		if((memcmp(zeiger->nonce, wpak->nonce, 28) == 0) && (memcmp(&zeiger->nonce[29], &wpak->nonce[29], 4) != 0))
+		if(memcmp(zeiger->ap, macap, 6) != 0) continue;
+		if(memcmp(zeiger->client, macclient, 6) != 0) continue;
+		if((memcmp(zeiger->nonce, wpak->nonce, 28) == 0) && (memcmp(&zeiger->nonce[28], &wpak->nonce[28], 4) != 0))
 			{
-			zeiger->status |= ST_NC;
-			zeigerakt->status |= ST_NC;
-			if(zeiger->nonce[31] != wpak->nonce[31]) zeiger->status |= ST_LE;
-			else if(zeiger->nonce[28] != wpak->nonce[28]) zeiger->status |= ST_BE;
 			eapolnccount++;
+			if(memcmp(&zeiger->nonce[30], &wpak->nonce[30], 2) != 0)
+				{
+				zeiger->status = ST_LE +ST_NC;
+				(messagelist +MESSAGELIST_MAX)->status = ST_LE +ST_NC;
+				}
+			else if(memcmp(&zeiger->nonce[28], &wpak->nonce[28], 2) != 0)
+				{
+				zeiger->status = ST_BE +ST_NC;
+				(messagelist +MESSAGELIST_MAX)->status = ST_BE +ST_NC;
+				}
 			}
 		}
+	}
+mpfield = 0;
+for(zeiger = messagelist; zeiger < messagelist +MESSAGELIST_MAX; zeiger++)
+	{
+	if(zeiger->timestamp == 0) break;
 	if((zeiger->message &HS_M2) == HS_M2)
 		{
 		if(memcmp(zeiger->ap, macap, 6) != 0) continue;
@@ -3471,13 +3550,25 @@ for(zeiger = messagelist; zeiger < messagelist +MESSAGELIST_MAX; zeiger++)
 		if(rcgap > ncvalue) continue;
 		if(eaptimestamp > zeiger->timestamp) eaptimegap = eaptimestamp -zeiger->timestamp;
 		else eaptimegap = zeiger->timestamp -eaptimestamp;
-		mpfield = ST_M32E2;
-		if(myaktreplaycount > 0)
+		if((authlen +EAPAUTH_SIZE) <= EAPOL_AUTHLEN_MAX)
 			{
-			if(zeiger->rc == myaktreplaycount) continue;
+			mpfield = ST_M32E2;
+			if(myaktreplaycount > 0)
+				{
+				if(zeiger->rc == myaktreplaycount) continue;
+				}
+			if(eaptimegap > eaptimegapmax) eaptimegapmax = eaptimegap;
+			if(eaptimegap <= eapoltimeoutvalue) addhandshake(eaptimegap, rcgap, zeiger, messagelist +MESSAGELIST_MAX, keyver, mpfield);
+			if(donotcleanflag == true)
+				{
+				mpfield = ST_M32E3;
+				if(myaktreplaycount > 0)
+					{
+					if(zeiger->rc == myaktreplaycount) continue;
+					}
+				if(eaptimegap <= eapoltimeoutvalue) addhandshake(eaptimegap, rcgap, zeiger, messagelist +MESSAGELIST_MAX, keyver, mpfield);
+				}
 			}
-		if(eaptimegap > eaptimegapmax) eaptimegapmax = eaptimegap; 
-		if(eaptimegap <= eapoltimeoutvalue) addhandshake(eaptimegap, rcgap, zeiger, messagelist +MESSAGELIST_MAX, keyver, mpfield);
 		}
 	if((zeiger->message &HS_M4) != HS_M4) continue;
 	if(memcmp(zeiger->ap, macap, 6) != 0) continue;
@@ -3488,26 +3579,38 @@ for(zeiger = messagelist; zeiger < messagelist +MESSAGELIST_MAX; zeiger++)
 	if(rcgap > ncvalue) continue;
 	if(eaptimestamp > zeiger->timestamp) eaptimegap = eaptimestamp -zeiger->timestamp;
 	else eaptimegap = zeiger->timestamp -eaptimestamp;
-	mpfield = ST_M34E4;
-	if(myaktreplaycount > 0)
+	if((authlen +EAPAUTH_SIZE) <= EAPOL_AUTHLEN_MAX)
 		{
-		if(zeiger->rc == myaktreplaycount) continue;
+		mpfield = ST_M34E4;
+		if(myaktreplaycount > 0)
+			{
+			if(zeiger->rc == myaktreplaycount) continue;
+			}
+		if(eaptimegap > eaptimegapmax) eaptimegapmax = eaptimegap;
+		if(eaptimegap <= eapoltimeoutvalue) addhandshake(eaptimegap, rcgap, zeiger, messagelist +MESSAGELIST_MAX, keyver, mpfield);
+		if(donotcleanflag == true)
+			{
+			mpfield = ST_M34E3;
+			if(myaktreplaycount > 0)
+				{
+				if(zeiger->rc == myaktreplaycount) continue;
+				}
+			if(eaptimegap <= eapoltimeoutvalue) addhandshake(eaptimegap, rcgap, zeiger, messagelist +MESSAGELIST_MAX, keyver, mpfield);
+			}
 		}
-	if(eaptimegap > eaptimegapmax) eaptimegapmax = eaptimegap; 
-	if(eaptimegap <= eapoltimeoutvalue) addhandshake(eaptimegap, rcgap, zeiger, messagelist +MESSAGELIST_MAX, keyver, mpfield);
 	}
-qsort(messagelist, MESSAGELIST_MAX +1, MESSAGELIST_SIZE, sort_messagelist_by_epcount);
+qsort(messagelist, MESSAGELIST_MAX +1, MESSAGELIST_SIZE, sort_messagelist_by_timestamp);
 return;
 }
 /*===========================================================================*/
-static void process80211eapol_m2(uint64_t eaptimestamp, uint8_t *macap, uint8_t *macclient, uint32_t restlen, uint8_t *eapauthptr)
+static void process80211eapol_m2(uint64_t eaptimestamp, uint8_t *macap, uint8_t *macclient, uint8_t *macsrc, uint32_t restlen, uint8_t *eapauthptr)
 {
 static int c;
 static messagelist_t *zeiger;
 static uint8_t *wpakptr;
 static wpakey_t *wpak;
 static eapauth_t *eapauth;
-static uint32_t authlen;
+static uint16_t authlen;
 static uint64_t eaptimegap;
 static uint8_t keyver;
 static uint64_t rc;
@@ -3520,10 +3623,20 @@ static const uint8_t foxtrott[4] = { 0xff, 0xff, 0xff, 0xff };
 
 eapolm2count++;
 eapolmsgcount++;
+if(memcmp(macap, macsrc, 6) != 0)
+	{
+	eapolrelayedcount++;
+	return;
+	}
 eapauth = (eapauth_t*)eapauthptr;
 authlen = ntohs(eapauth->len);
+if(authlen == 0) return;
 if(authlen +EAPAUTH_SIZE > restlen) return;
-if(authlen +EAPAUTH_SIZE > EAPOL_AUTHLEN_MAX) return;
+if((authlen +EAPAUTH_SIZE) > EAPOL_AUTHLEN_MAX)
+	{
+	eapolm2oversizedcount++;
+	return;
+	}
 wpakptr = eapauthptr +EAPAUTH_SIZE;
 wpak = (wpakey_t*)wpakptr;
 keyver = ntohs(wpak->keyinfo) & WPA_KEY_INFO_TYPE_MASK;
@@ -3584,8 +3697,8 @@ if(memcmp(&zeroed32, wpak->keyid, 8) != 0)
 	eapolm2errorcount++;
 	return;
 	}
-if((memcmp(&fakenonce1, wpak->nonce, 32) == 0) && (rc == 17)) return; 
-if((memcmp(&fakenonce2, wpak->nonce, 32) == 0) && (rc == 17)) return; 
+if((memcmp(&fakenonce1, wpak->nonce, 32) == 0) && (rc == 17)) return;
+if((memcmp(&fakenonce2, wpak->nonce, 32) == 0) && (rc == 17)) return;
 zeiger = messagelist +MESSAGELIST_MAX;
 memset(zeiger, 0, MESSAGELIST_SIZE);
 zeiger->timestamp = eaptimestamp;
@@ -3595,8 +3708,11 @@ memcpy(zeiger->ap, macap, 6);
 zeiger->message = HS_M2;
 zeiger->rc = rc;
 memcpy(zeiger->nonce, wpak->nonce, 32);
-zeiger->eapauthlen = authlen +EAPAUTH_SIZE;
-memcpy(zeiger->eapol, eapauthptr, zeiger->eapauthlen);
+if((authlen +EAPAUTH_SIZE) <= EAPOL_AUTHLEN_MAX)
+	{
+	zeiger->eapauthlen = authlen +EAPAUTH_SIZE;
+	memcpy(zeiger->eapol, eapauthptr, zeiger->eapauthlen);
+	}
 if(wpainfolen >= RSNIE_LEN_MIN)
 	{
 	if(gettags(wpainfolen, wpakptr +WPAKEY_SIZE, &tags) == false) return;
@@ -3609,11 +3725,13 @@ if(wpainfolen >= RSNIE_LEN_MIN)
 		{
 		zeiger->message |= HS_PMKID;
 		memcpy(zeiger->pmkid, tags.pmkid, 16);
-		addpmkid(macclient, macap, tags.pmkid);
+		addpmkid(eaptimestamp, macclient, macap, tags.pmkid, PMKID_CLIENT);
 		}
 	}
+mpfield = 0;
 for(zeiger = messagelist; zeiger < messagelist +MESSAGELIST_MAX; zeiger++)
 	{
+	if(zeiger->timestamp == 0) break;
 	if((zeiger->message &HS_M1) == HS_M1)
 		{
 		if(memcmp(zeiger->client, macclient, 6) != 0) continue;
@@ -3627,18 +3745,21 @@ for(zeiger = messagelist; zeiger < messagelist +MESSAGELIST_MAX; zeiger++)
 		if(rcgap > ncvalue) continue;
 		if(eaptimestamp > zeiger->timestamp) eaptimegap = eaptimestamp -zeiger->timestamp;
 		else eaptimegap = zeiger->timestamp -eaptimestamp;
-		mpfield = ST_M12E2;
-		if(myaktreplaycount > 0)
+		if((authlen +EAPAUTH_SIZE) <= EAPOL_AUTHLEN_MAX)
 			{
-			if((rc == myaktreplaycount) && (memcmp(&myaktanonce, zeiger->nonce, 32) == 0))
+			mpfield = ST_M12E2;
+			if(myaktreplaycount > 0)
 				{
-				eaptimegap = 0;
-				mpfield |= ST_APLESS;
+				if((rc == myaktreplaycount) && (memcmp(&myaktanonce, zeiger->nonce, 32) == 0))
+					{
+					eaptimegap = 0;
+					mpfield |= ST_APLESS;
+					}
+				if(rcgap != 0) continue;
 				}
-			if(rcgap != 0) continue;
+			if(eaptimegap > eaptimegapmax) eaptimegapmax = eaptimegap;
+			if(eaptimegap <= eapoltimeoutvalue) addhandshake(eaptimegap, rcgap, messagelist +MESSAGELIST_MAX, zeiger, keyver, mpfield);
 			}
-		if(eaptimegap > eaptimegapmax) eaptimegapmax = eaptimegap; 
-		if(eaptimegap <= eapoltimeoutvalue) addhandshake(eaptimegap, rcgap, messagelist +MESSAGELIST_MAX, zeiger, keyver, mpfield);
 		}
 	if((zeiger->message &HS_M3) != HS_M3) continue;
 	if(memcmp(zeiger->client, macclient, 6) != 0) continue;
@@ -3652,20 +3773,19 @@ for(zeiger = messagelist; zeiger < messagelist +MESSAGELIST_MAX; zeiger++)
 	if(rcgap > ncvalue) continue;
 	if(eaptimestamp > zeiger->timestamp) eaptimegap = eaptimestamp -zeiger->timestamp;
 	else eaptimegap = zeiger->timestamp -eaptimestamp;
-	mpfield = ST_M32E2;
-	if(myaktreplaycount > 0)
+	if((authlen +EAPAUTH_SIZE) <= EAPOL_AUTHLEN_MAX)
 		{
-		if((rc == myaktreplaycount) && (memcmp(&myaktanonce, zeiger->nonce, 32) == 0))
+		mpfield = ST_M32E2;
+		if(eaptimegap > eaptimegapmax) eaptimegapmax = eaptimegap;
+		if(eaptimegap <= eapoltimeoutvalue) addhandshake(eaptimegap, rcgap, messagelist +MESSAGELIST_MAX, zeiger, keyver, mpfield);
+		if(donotcleanflag == true)
 			{
-			eaptimegap = 0;
-			mpfield |= ST_APLESS;
+			mpfield = ST_M32E3;
+			if(eaptimegap <= eapoltimeoutvalue) addhandshake(eaptimegap, rcgap, messagelist +MESSAGELIST_MAX, zeiger, keyver, mpfield);
 			}
-		if(rcgap != 0) continue;
 		}
-	if(eaptimegap > eaptimegapmax) eaptimegapmax = eaptimegap; 
-	if(eaptimegap <= eapoltimeoutvalue) addhandshake(eaptimegap, rcgap, messagelist +MESSAGELIST_MAX, zeiger, keyver, mpfield);
 	}
-qsort(messagelist, MESSAGELIST_MAX +1, MESSAGELIST_SIZE, sort_messagelist_by_epcount);
+qsort(messagelist, MESSAGELIST_MAX +1, MESSAGELIST_SIZE, sort_messagelist_by_timestamp);
 return;
 }
 /*===========================================================================*/
@@ -3676,7 +3796,7 @@ static messagelist_t *zeiger;
 static uint8_t *wpakptr;
 static wpakey_t *wpak;
 static eapauth_t *eapauth;
-static uint32_t authlen;
+static uint16_t authlen;
 static pmkid_t *pmkid;
 static uint8_t keyver;
 static uint64_t rc;
@@ -3685,15 +3805,41 @@ static const uint8_t foxtrott[4] = { 0xff, 0xff, 0xff, 0xff };
 
 eapolm1count++;
 eapolmsgcount++;
+if(memcmp(macap, macsrc, 6) != 0)
+	{
+	eapolrelayedcount++;
+	return;
+	}
 eapauth = (eapauth_t*)eapauthptr;
 authlen = ntohs(eapauth->len);
-if(authlen > restlen) return;
+if(authlen > restlen)
+	{
+	eapolm1errorcount++;
+	return;
+	}
 wpakptr = eapauthptr +EAPAUTH_SIZE;
 wpak = (wpakey_t*)wpakptr;
 keyver = ntohs(wpak->keyinfo) & WPA_KEY_INFO_TYPE_MASK;
 if((keyver == 0) || (keyver > 3))
 	{
 	eapolm1kdv0count++;
+	if(authlen >= (int)(WPAKEY_SIZE +PMKID_SIZE))
+		{
+		pmkid = (pmkid_t*)(wpakptr +WPAKEY_SIZE);
+		if(pmkid->id != TAG_VENDOR) return;
+		if((pmkid->len == 0x14) && (pmkid->type == 0x04))
+			{
+			if(memcmp(&zeroed32, pmkid->pmkid, 16) == 0)
+				{
+				pmkiduselesscount++;
+				}
+			else
+				{
+				pmkidakmcount++;
+				pmkidcount++;
+				}
+			}
+		}
 	return;
 	}
 if(ntohs(wpak->wpadatalen) > (restlen -EAPAUTH_SIZE -WPAKEY_SIZE))
@@ -3719,8 +3865,8 @@ if(memcmp(&zeroed32, wpak->keyid, 8) != 0)
 	eapolm1errorcount++;
 	return;
 	}
-if((memcmp(&fakenonce1, wpak->nonce, 32) == 0) && (rc == 17)) return; 
-if((memcmp(&fakenonce2, wpak->nonce, 32) == 0) && (rc == 17)) return; 
+if((memcmp(&fakenonce1, wpak->nonce, 32) == 0) && (rc == 17)) return;
+if((memcmp(&fakenonce2, wpak->nonce, 32) == 0) && (rc == 17)) return;
 zeiger = messagelist +MESSAGELIST_MAX;
 memset(zeiger, 0, MESSAGELIST_SIZE);
 zeiger->timestamp = eaptimestamp;
@@ -3728,14 +3874,14 @@ zeiger->eapolmsgcount = eapolmsgcount;
 memcpy(zeiger->client, macclient, 6);
 memcpy(zeiger->ap, macap, 6);
 zeiger->message = HS_M1;
+zeiger->status = ST_NC;
 zeiger->rc = rc;
 memcpy(zeiger->nonce, wpak->nonce, 32);
-
-if((zeiger->rc == myaktreplaycount) && (memcmp(&myaktanonce, zeiger->nonce, 32) == 0)) 
+if((zeiger->rc == myaktreplaycount) && (memcmp(&myaktanonce, zeiger->nonce, 32) == 0))
 	{
-	zeiger->status |= ST_APLESS;
+	zeiger->status = ST_APLESS;
 	eapolm1ancount++;
-	qsort(messagelist, MESSAGELIST_MAX +1, MESSAGELIST_SIZE, sort_messagelist_by_epcount);
+	qsort(messagelist, MESSAGELIST_MAX +1, MESSAGELIST_SIZE, sort_messagelist_by_timestamp);
 	return;
 	}
 if(authlen >= (int)(WPAKEY_SIZE +PMKID_SIZE))
@@ -3767,29 +3913,39 @@ if(authlen >= (int)(WPAKEY_SIZE +PMKID_SIZE))
 					}
 				}
 			memcpy(zeiger->pmkid, pmkid->pmkid, 16);
-			addpmkid(macclient, macsrc, pmkid->pmkid);
+			if(keyver != 3) addpmkid(eaptimestamp, macclient, macsrc, pmkid->pmkid, PMKID_AP);
+			else addpmkid(eaptimestamp, macclient, macsrc, pmkid->pmkid, PMKID_AP | PMKID_APPSK256);
 			}
 		}
 	else pmkiduselesscount++;
 	}
 for(zeiger = messagelist; zeiger < messagelist +MESSAGELIST_MAX +1; zeiger++)
 	{
+	if(zeiger->timestamp == 0) break;
 	if(((zeiger->message &HS_M1) != HS_M1) && ((zeiger->message &HS_M3) != HS_M3)) continue;
 	if(memcmp(zeiger->ap, macap, 6) != 0) continue;
+	if(memcmp(zeiger->client, macclient, 6) != 0) continue;
 	eapolm1ancount++;
 	if((memcmp(zeiger->nonce, wpak->nonce, 28) == 0) && (memcmp(&zeiger->nonce[28], &wpak->nonce[28], 4) != 0))
 		{
 		eapolnccount++;
-		zeiger->status |= ST_NC;
-		if(zeiger->nonce[31] != wpak->nonce[31]) zeiger->status |= ST_LE;
-		else if(zeiger->nonce[28] != wpak->nonce[28]) zeiger->status |= ST_BE;
+		if(memcmp(&zeiger->nonce[30], &wpak->nonce[30], 2) != 0)
+			{
+			zeiger->status = ST_LE +ST_NC;
+			(messagelist +MESSAGELIST_MAX)->status = ST_LE +ST_NC;
+			}
+		else if(memcmp(&zeiger->nonce[28], &wpak->nonce[28], 2) != 0)
+			{
+			zeiger->status = ST_BE +ST_NC;
+			(messagelist +MESSAGELIST_MAX)->status = ST_BE +ST_NC;
+			}
 		}
 	}
-qsort(messagelist, MESSAGELIST_MAX +1, MESSAGELIST_SIZE, sort_messagelist_by_epcount);
+qsort(messagelist, MESSAGELIST_MAX +1, MESSAGELIST_SIZE, sort_messagelist_by_timestamp);
 return;
 }
 /*===========================================================================*/
-static void process80211rc4key()
+static void process80211rc4key(void)
 {
 eapolrc4count++;
 return;
@@ -3811,11 +3967,6 @@ if(authlen > eapauthlen)
 	eapolmsgerrorcount++;
 	return;
 	}
-if(authlen < WPAKEY_SIZE)
-	{
-	eapolmsgerrorcount++;
-	return;
-	}
 wpakptr = eapauthptr +EAPAUTH_SIZE;
 wpak = (wpakey_t*)wpakptr;
 keyinfo = (getkeyinfo(ntohs(wpak->keyinfo)));
@@ -3827,6 +3978,11 @@ if(wpak->keydescriptor == EAP_KDT_RC4)
 else if(wpak->keydescriptor == EAP_KDT_WPA) eapolwpacount++;
 else if(wpak->keydescriptor == EAP_KDT_RSN) eapolrsncount++;
 else return;
+if(authlen < WPAKEY_SIZE)
+	{
+	eapolmsgerrorcount++;
+	return;
+	}
 keylen = ntohs(wpak->keylen);
 if((keylen != 0) && (keylen != 16) && (keylen != 32))
 	{
@@ -3836,11 +3992,12 @@ if((keylen != 0) && (keylen != 16) && (keylen != 32))
 if(keyinfo == 1) process80211eapol_m1(eaptimestamp, macto, macfm, macsrc, eapauthlen, eapauthptr);
 else if(keyinfo == 2)
 	{
-	if(authlen != 0x5f) process80211eapol_m2(eaptimestamp, macto, macfm, eapauthlen, eapauthptr);
-	else process80211eapol_m4(eaptimestamp, macto, macfm, eapauthlen, eapauthptr);
+	if(authlen != 0x5f) process80211eapol_m2(eaptimestamp, macto, macfm, macsrc, eapauthlen, eapauthptr);
+	else process80211eapol_m4(eaptimestamp, macto, macfm, macsrc, eapauthlen, eapauthptr);
 	}
-else if(keyinfo == 3) process80211eapol_m3(eaptimestamp, macto, macfm, eapauthlen, eapauthptr);
-else if(keyinfo == 4) process80211eapol_m4(eaptimestamp, macto, macfm, eapauthlen, eapauthptr);
+else if(keyinfo == 3) process80211eapol_m3(eaptimestamp, macto, macfm, macsrc, eapauthlen, eapauthptr);
+else if(keyinfo == 4) process80211eapol_m4(eaptimestamp, macto, macfm, macsrc, eapauthlen, eapauthptr);
+
 return;
 }
 /*===========================================================================*/
@@ -3849,7 +4006,7 @@ static void process80211eap(uint64_t eaptimestamp, uint8_t *macto, uint8_t *macf
 static eapauth_t *eapauth;
 
 eapauth = (eapauth_t*)eapptr;
-if(restlen < (int)EAPAUTH_SIZE) return; 
+if(restlen < (int)EAPAUTH_SIZE) return;
 if(eapauth->type == EAPOL_KEY)
 	{
 	process80211eapol(eaptimestamp, macto, macfm, macsrc, restlen, eapptr);
@@ -3870,7 +4027,7 @@ if(fh_nmea != NULL) writegpwpl(macfm);
 return;
 }
 /*===========================================================================*/
-static bool cleanbackmac()
+static bool cleanbackmac(void)
 {
 static int c;
 static maclist_t *zeiger;
@@ -3911,7 +4068,7 @@ for(c = 0; c < 20; c ++)
 		memcpy(zeiger->devicename, aplistptr->devicename, aplistptr->devicenamelen);
 		zeiger->devicenamelen = aplistptr->devicenamelen;
 		}
-	if(zeiger->enrolleelen == 0) 
+	if(zeiger->enrolleelen == 0)
 		{
 		memcpy(zeiger->enrollee, aplistptr->enrollee, aplistptr->enrolleelen);
 		zeiger->enrolleelen = aplistptr->enrolleelen;
@@ -3937,7 +4094,7 @@ if(tags.essidlen == 0) return;
 if(tags.essid[0] == 0) return;
 if(aplistptr >= aplist +maclistmax)
 	{
-	aplistnew = realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
+	aplistnew = (maclist_t*)realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
 	if(aplistnew == NULL)
 		{
 		fprintf(stderr, "failed to allocate memory for internal list\n");
@@ -3960,24 +4117,24 @@ aplistptr->cipher = tags.cipher;
 aplistptr->akm = tags.akm;
 if(ignoreieflag == true)
 	{
-	if(memcmp(&zeroed32, tags.pmkid, 16) != 0) addpmkid(macclient, macap, tags.pmkid);
+	if(memcmp(&zeroed32, tags.pmkid, 16) != 0) addpmkid(reassociationrequesttimestamp, macclient, macap, tags.pmkid, PMKID_CLIENT);
 	}
 else if(((tags.akm &TAK_PSK) == TAK_PSK) || ((tags.akm &TAK_PSKSHA256) == TAK_PSKSHA256))
 	{
-	if(memcmp(&zeroed32, tags.pmkid, 16) != 0) addpmkid(macclient, macap, tags.pmkid);
+	if(memcmp(&zeroed32, tags.pmkid, 16) != 0) addpmkid(reassociationrequesttimestamp, macclient, macap, tags.pmkid, PMKID_CLIENT);
 	}
 else if((tags.akm &TAK_FT_PSK) == TAK_FT_PSK) reassociationrequestftpskcount++;
 
-if((tags.akm &TAK_PSK) == TAK_PSK) reassociationrequestpskcount++; 
-else if((tags.akm &TAK_FT_PSK) == TAK_FT_PSK) reassociationrequestftpskcount++; 
-else if((tags.akm &TAK_PSKSHA256) == TAK_PSKSHA256) reassociationrequestpsk256count++; 
-else if((tags.akm &TAK_SAE_SHA256) == TAK_SAE_SHA256) reassociationrequestsae256count++; 
-else if((tags.akm &TAK_SAE_SHA384B) == TAK_SAE_SHA384B) reassociationrequestsae384bcount++; 
-else if((tags.akm &TAK_OWE) == TAK_OWE) reassociationrequestowecount++; 
+if((tags.akm &TAK_PSK) == TAK_PSK) reassociationrequestpskcount++;
+else if((tags.akm &TAK_FT_PSK) == TAK_FT_PSK) reassociationrequestftpskcount++;
+else if((tags.akm &TAK_PSKSHA256) == TAK_PSKSHA256) reassociationrequestpsk256count++;
+else if((tags.akm &TAK_SAE_SHA256) == TAK_SAE_SHA256) reassociationrequestsae256count++;
+else if((tags.akm &TAK_SAE_SHA384B) == TAK_SAE_SHA384B) reassociationrequestsae384bcount++;
+else if((tags.akm &TAK_OWE) == TAK_OWE) reassociationrequestowecount++;
 if(cleanbackmac() == false) aplistptr++;
 if(aplistptr >= aplist +maclistmax)
 	{
-	aplistnew = realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
+	aplistnew = (maclist_t*)realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
 	if(aplistnew == NULL)
 		{
 		fprintf(stderr, "failed to allocate memory for internal list\n");
@@ -4019,7 +4176,7 @@ if(tags.essidlen == 0) return;
 if(tags.essid[0] == 0) return;
 if(aplistptr >= aplist +maclistmax)
 	{
-	aplistnew = realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
+	aplistnew = (maclist_t*)realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
 	if(aplistnew == NULL)
 		{
 		fprintf(stderr, "failed to allocate memory for internal list\n");
@@ -4042,22 +4199,22 @@ aplistptr->cipher = tags.cipher;
 aplistptr->akm = tags.akm;
 if(ignoreieflag == true)
 	{
-	if(memcmp(&zeroed32, tags.pmkid, 16) != 0) addpmkid(macclient, macap, tags.pmkid);
+	if(memcmp(&zeroed32, tags.pmkid, 16) != 0) addpmkid(associationrequesttimestamp, macclient, macap, tags.pmkid, PMKID_CLIENT);
 	}
 else if(((tags.akm &TAK_PSK) == TAK_PSK) || ((tags.akm &TAK_PSKSHA256) == TAK_PSKSHA256))
 	{
-	if(memcmp(&zeroed32, tags.pmkid, 16) != 0) addpmkid(macclient, macap, tags.pmkid);
+	if(memcmp(&zeroed32, tags.pmkid, 16) != 0) addpmkid(associationrequesttimestamp, macclient, macap, tags.pmkid, PMKID_CLIENT);
 	}
 if((tags.akm &TAK_PSK) == TAK_PSK) associationrequestpskcount++;
-else if((tags.akm &TAK_FT_PSK) == TAK_FT_PSK) associationrequestftpskcount++; 
-else if((tags.akm &TAK_PSKSHA256) == TAK_PSKSHA256) associationrequestpsk256count++; 
-else if((tags.akm &TAK_SAE_SHA256) == TAK_SAE_SHA256) associationrequestsae256count++; 
-else if((tags.akm &TAK_SAE_SHA384B) == TAK_SAE_SHA384B) associationrequestsae384bcount++; 
-else if((tags.akm &TAK_OWE) == TAK_OWE) associationrequestowecount++; 
+else if((tags.akm &TAK_FT_PSK) == TAK_FT_PSK) associationrequestftpskcount++;
+else if((tags.akm &TAK_PSKSHA256) == TAK_PSKSHA256) associationrequestpsk256count++;
+else if((tags.akm &TAK_SAE_SHA256) == TAK_SAE_SHA256) associationrequestsae256count++;
+else if((tags.akm &TAK_SAE_SHA384B) == TAK_SAE_SHA384B) associationrequestsae384bcount++;
+else if((tags.akm &TAK_OWE) == TAK_OWE) associationrequestowecount++;
 if(cleanbackmac() == false) aplistptr++;
 if(aplistptr >= aplist +maclistmax)
 	{
-	aplistnew = realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
+	aplistnew = (maclist_t*)realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
 	if(aplistnew == NULL)
 		{
 		fprintf(stderr, "failed to allocate memory for internal list\n");
@@ -4115,7 +4272,7 @@ if(tags.essidlen == 0) return;
 if(tags.essid[0] == 0) return;
 if(aplistptr >= aplist +maclistmax)
 	{
-	aplistnew = realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
+	aplistnew = (maclist_t*)realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
 	if(aplistnew == NULL)
 		{
 		fprintf(stderr, "failed to allocate memory for internal list\n");
@@ -4136,7 +4293,7 @@ memcpy(aplistptr->essid, tags.essid, tags.essidlen);
 if(cleanbackmac() == false) aplistptr++;
 if(aplistptr >= aplist +maclistmax)
 	{
-	aplistnew = realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
+	aplistnew = (maclist_t*)realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
 	if(aplistnew == NULL)
 		{
 		fprintf(stderr, "failed to allocate memory for internal list\n");
@@ -4163,14 +4320,14 @@ static void process80211probe_req(uint64_t proberequesttimestamp, uint8_t *maccl
 static maclist_t *aplistnew;
 static tags_t tags;
 
-proberequestcount++;
+proberequestundirectedcount++;
 if(proberequestlen < (int)IETAG_SIZE) return;
-if(gettags(proberequestlen, proberequestptr, &tags) == false) return; 
+if(gettags(proberequestlen, proberequestptr, &tags) == false) return;
 if(tags.essidlen == 0) return;
 if(tags.essid[0] == 0) return;
 if(aplistptr >= aplist +maclistmax)
 	{
-	aplistnew = realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
+	aplistnew = (maclist_t*)realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
 	if(aplistnew == NULL)
 		{
 		fprintf(stderr, "failed to allocate memory for internal list\n");
@@ -4194,10 +4351,13 @@ return;
 /*===========================================================================*/
 static void process80211probe_resp(uint64_t proberesponsetimestamp, uint8_t *macap, uint32_t proberesponselen, uint8_t *proberesponseptr)
 {
+static size_t i;
 static int apinfolen;
 static maclist_t *aplistnew;
 static uint8_t *apinfoptr;
+static time_t tvproberesponse;
 static tags_t tags;
+static bool naf;
 
 proberesponsecount++;
 apinfoptr = proberesponseptr +CAPABILITIESAP_SIZE;
@@ -4209,15 +4369,40 @@ if(tags.essidlen == 0)
 	proberesponsessidunsetcount++;
 	return;
 	}
+if(tags.essidlen > 32)
+	{
+	beaconssidoversizedcount++;
+	return;
+	}
 if(memcmp(&tags.essid, &zeroed32, tags.essidlen) == 0)
 	{
 	proberesponsessidzeroedcount++;
 	return;
 	}
 if(tags.essid[0] == 0) return;
+if(fh_lts != NULL)
+	{
+	if(tags.essidlen > 0) 
+		{
+		naf = false;
+		for(i = 0; i < tags.essidlen; i++)
+			{
+			if(tags.essid[i] < 0x20)
+				{
+				naf = true;
+				break;
+				}
+			}
+		if(naf == false)
+			{
+			tvproberesponse = proberesponsetimestamp /1000000000;
+			fprintf(fh_lts, "%ld\t%d\t%02x%02x%02x%02x%02x%02x\t%.*s\n", tvproberesponse, rssi, macap[0], macap[1], macap[2], macap[3], macap[4], macap[5], tags.essidlen, tags.essid);
+			}
+		}
+	}
 if(aplistptr >= aplist +maclistmax)
 	{
-	aplistnew = realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
+	aplistnew = (maclist_t*)realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
 	if(aplistnew == NULL)
 		{
 		fprintf(stderr, "failed to allocate memory for internal list\n");
@@ -4282,10 +4467,13 @@ return false;
 /*===========================================================================*/
 static void process80211beacon(uint64_t beacontimestamp, uint8_t *macbc, uint8_t *macap, uint32_t beaconlen, uint8_t *beaconptr)
 {
+static size_t i;
 static int apinfolen;
 static uint8_t *apinfoptr;
+static time_t tvbeacon;
 static maclist_t *aplistnew;
 static tags_t tags;
+static bool naf;
 
 beaconcount++;
 if(memcmp(&mac_broadcast, macbc, 6) != 0)
@@ -4320,7 +4508,26 @@ if(memcmp(&tags.essid, &zeroed32, tags.essidlen) == 0)
 	beaconssidzeroedcount++;
 	return;
 	}
-
+if(fh_lts != NULL)
+	{
+	if((tags.essidlen > 0) && (tags.essidlen <= 32) && (tags.essid[0] != 0)) 
+		{
+		naf = false;
+		for(i = 0; i < tags.essidlen; i++)
+			{
+			if(tags.essid[i] < 0x20)
+				{
+				naf = true;
+				break;
+				}
+			}
+		if(naf == false)
+			{
+			tvbeacon = beacontimestamp /1000000000;
+			fprintf(fh_lts, "%ld\t%d\t%02x%02x%02x%02x%02x%02x\t%.*s\n", tvbeacon, rssi, macap[0], macap[1], macap[2], macap[3], macap[4], macap[5], tags.essidlen, tags.essid);
+			}
+		}
+	}
 if((tags.channel > 0) && (tags.channel <= 14))
 	{
 	beaconchannel[0] |= GHZ24;
@@ -4334,7 +4541,7 @@ if((tags.channel > 14) && (tags.channel < CHANNEL_MAX))
 if(tags.essid[0] == 0) return;
 if(aplistptr >= aplist +maclistmax)
 	{
-	aplistnew = realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
+	aplistnew = (maclist_t*)realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
 	if(aplistnew == NULL)
 		{
 		fprintf(stderr, "failed to allocate memory for internal list\n");
@@ -4375,7 +4582,6 @@ static void process80211actionmeasurement(uint64_t actiontimestamp, uint8_t *mac
 {
 static maclist_t *aplistnew;
 static tags_t tags;
-
 static actmm_t *actmm;
 
 if(packetlen < ACTIONMEASUREMENTFRAME_SIZE) return;
@@ -4384,12 +4590,12 @@ if(actmm->actioncode != ACT_MM_NRREQ) return;
 packetlen -= (int)ACTIONMEASUREMENTFRAME_SIZE;
 packetptr += (int)ACTIONMEASUREMENTFRAME_SIZE;
 if(packetlen < (int)IETAG_SIZE) return;
-if(gettags(packetlen, packetptr, &tags) == false) return; 
+if(gettags(packetlen, packetptr, &tags) == false) return;
 if(tags.essidlen == 0) return;
 if(tags.essid[0] == 0) return;
 if(aplistptr >= aplist +maclistmax)
 	{
-	aplistnew = realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
+	aplistnew = (maclist_t*)realloc(aplist, (maclistmax +MACLIST_MAX) *MACLIST_SIZE);
 	if(aplistnew == NULL)
 		{
 		fprintf(stderr, "failed to allocate memory for internal list\n");
@@ -4444,6 +4650,8 @@ static llc_t *llc;
 static uint8_t *mpduptr;
 static mpdu_t *mpdu;
 
+ieee80211flag = true;
+
 if(packetlen < (int)MAC_SIZE_NORM) return;
 macfrx = (mac_t*)packetptr;
 
@@ -4471,8 +4679,14 @@ if(macfrx->type == IEEE80211_FTYPE_MGMT)
 		else process80211probe_req_direct(packetimestamp, macfrx->addr2, macfrx->addr1, payloadlen, payloadptr);
 		}
 	else if(macfrx->subtype == IEEE80211_STYPE_ACTION) process80211action(packetimestamp, macfrx->addr2, payloadlen, payloadptr);
-	else if(macfrx->subtype == IEEE80211_STYPE_DEAUTH) deauthenticationcount++;
-	else if(macfrx->subtype == IEEE80211_STYPE_DISASSOC) disassociationcount++;
+	else if(macfrx->subtype == IEEE80211_STYPE_DEAUTH)
+		{
+		if(macfrx->retry == 0) deauthenticationcount++;
+		}
+	else if(macfrx->subtype == IEEE80211_STYPE_DISASSOC)
+		{
+		if(macfrx->retry == 0) disassociationcount++;
+		}
 	else if(macfrx->subtype == IEEE80211_STYPE_MGTRESERVED) mgtreservedcount++;
 	}
 else if(macfrx->type == IEEE80211_FTYPE_DATA)
@@ -4508,7 +4722,7 @@ else if(macfrx->type == IEEE80211_FTYPE_DATA)
 return;
 }
 /*===========================================================================*/
-void processethernetpacket(uint64_t timestamp, uint32_t caplen, uint8_t *packetptr)
+static void processethernetpacket(uint64_t timestamp, uint32_t caplen, uint8_t *packetptr)
 {
 static eth2_t *eth2;
 
@@ -4531,7 +4745,7 @@ if(ntohs(eth2->ether_type) == LLC_TYPE_AUTH)
 return;
 }
 /*===========================================================================*/
-void processlobapacket(uint64_t timestamp, uint32_t caplen, uint8_t *packetptr)
+static void processlobapacket(uint64_t timestamp, uint32_t caplen, uint8_t *packetptr)
 {
 static loba_t *loba;
 if(caplen < LOBA_SIZE) return;
@@ -4546,7 +4760,7 @@ else if(loba->family == LOBA_IPV630) processipv6(timestamp, caplen -LOBA_SIZE, p
 return;
 }
 /*===========================================================================*/
-static void getradiotapfield(uint16_t rthlen, uint32_t caplen, uint8_t *capptr)
+static bool getradiotapfield(uint16_t rthlen, uint8_t *capptr)
 {
 static int i;
 static uint16_t pf;
@@ -4556,7 +4770,6 @@ static uint32_t *pp;
 frequency = 0;
 rth = (rth_t*)capptr;
 pf = RTH_SIZE;
-if((rth->it_present & IEEE80211_RADIOTAP_DBM_ANTSIGNAL) != IEEE80211_RADIOTAP_DBM_ANTSIGNAL) return;
 if((rth->it_present & IEEE80211_RADIOTAP_EXT) == IEEE80211_RADIOTAP_EXT)
 	{
 	pp = (uint32_t*)capptr;
@@ -4569,48 +4782,80 @@ if((rth->it_present & IEEE80211_RADIOTAP_EXT) == IEEE80211_RADIOTAP_EXT)
 		if((pp[i] & IEEE80211_RADIOTAP_EXT) != IEEE80211_RADIOTAP_EXT) break;
 		}
 	}
-if((rth->it_present & IEEE80211_RADIOTAP_TSFT) == IEEE80211_RADIOTAP_TSFT) pf += 8;
-if((rth->it_present & IEEE80211_RADIOTAP_FLAGS) == IEEE80211_RADIOTAP_FLAGS) pf += 1;
+if((rth->it_present & IEEE80211_RADIOTAP_TSFT) == IEEE80211_RADIOTAP_TSFT)
+	{
+	if(pf > rthlen) return false;
+	if((pf %8) != 0) pf += 4;
+	pf += 8;
+	}
+if((rth->it_present & IEEE80211_RADIOTAP_FLAGS) == IEEE80211_RADIOTAP_FLAGS)
+	{
+	if(pf > rthlen) return false;
+	if((capptr[pf] & 0x50) == 0x50)
+		{
+		fcsbadframecount++;
+		if(donotcleanflag == false) return false;
+		}
+	else if((capptr[pf] & 0x50) == 0x10)
+		{
+		fcsframecount++;
+		}
+	pf += 1;
+	}
 if((rth->it_present & IEEE80211_RADIOTAP_RATE) == IEEE80211_RADIOTAP_RATE) pf += 1;
 if((rth->it_present & IEEE80211_RADIOTAP_CHANNEL) == IEEE80211_RADIOTAP_CHANNEL)
 	{
-	if(pf > caplen) return;
-	if((pf %2) != 0) pf += 1; 
+	if(pf > rthlen) return false;
+	if((pf %2) != 0) pf += 1;
 	frequency = (capptr[pf +1] << 8) + capptr[pf];
 	usedfrequency[frequency] += 1;
-	if((frequency >= 2407) && (frequency <= 2474))
+	if(frequency == 2484)
+		{
+		interfacechannel = 14;
+		band24count++;
+		}
+	else if(frequency < 2484)
 		{
 		interfacechannel = (frequency -2407)/5;
 		band24count++;
 		}
-	else if((frequency >= 2481) && (frequency <= 2487)) 
+	else if(frequency >= 4910 && frequency <= 4980) 
 		{
-		interfacechannel = (frequency -2412)/5;
-		band24count++;
+		interfacechannel = (frequency - 4000)/5;
+		band5count++;
 		}
-	else if((frequency >= 5005) && (frequency <= 5980))
+	else if(frequency < 5925)
 		{
 		interfacechannel = (frequency -5000)/5;
 		band5count++;
 		}
-	else if((frequency >= 5955) && (frequency <= 6415))
+	else if(frequency == 5935)
+		{
+		interfacechannel = 2;
+		band6count++;
+		}
+	else if((frequency >= 5955) && (frequency <= 7115))
 		{
 		interfacechannel = (frequency -5950)/5;
 		band6count++;
 		}
 	pf += 4;
 	}
-if((rth->it_present & IEEE80211_RADIOTAP_FHSS) == IEEE80211_RADIOTAP_FHSS) 
+if((rth->it_present & IEEE80211_RADIOTAP_FHSS) == IEEE80211_RADIOTAP_FHSS)
 		{
-		if((pf %2) != 0) pf += 1; 
+		if((pf %2) != 0) pf += 1;
 		pf += 2;
 		}
 if((rth->it_present & IEEE80211_RADIOTAP_DBM_ANTSIGNAL) == IEEE80211_RADIOTAP_DBM_ANTSIGNAL)
 	{
-	if(pf > caplen) return;
+	if(pf > rthlen)
+		{
+		if(donotcleanflag == false) return false;
+		return true;
+		}
 	rssi = capptr[pf];
 	}
-return;
+return true;
 }
 /*===========================================================================*/
 static void processlinktype(uint64_t captimestamp, uint32_t linktype, uint32_t caplen, uint8_t *capptr)
@@ -4654,6 +4899,7 @@ if(fh_raw_out != NULL)
 		}
 	fprintf(fh_raw_out, "*%02x\n", cs);
 	}
+
 if(captimestamp < captimestampold) sequenceerrorcount++;
 captimestampold = captimestamp;
 if(timestampmin == 0) timestampmin = captimestamp;
@@ -4679,7 +4925,7 @@ if(linktype == DLT_IEEE802_11_RADIO)
 	rth->it_len = byte_swap_16(rth->it_len);
 	rth->it_present = byte_swap_32(rth->it_present);
 	#endif
-	if(rth->it_len > caplen)
+	if(rth->it_len >= caplen)
 		{
 		pcapreaderrors++;
 		radiotaperrorcount++;
@@ -4693,7 +4939,12 @@ if(linktype == DLT_IEEE802_11_RADIO)
 		if(fh_log != NULL) fprintf(fh_log, "unsupported radiotap header version: %ld\n", rawpacketcount);
 		return;
 		}
-	getradiotapfield(rth->it_len, caplen, capptr);
+	if(getradiotapfield(rth->it_len, capptr) == false)
+		{
+		pcapreaderrors++;
+		radiotaperrorcount++;
+		return;
+		}
 	packetlen = caplen -rth->it_len;
 	packetptr = capptr +rth->it_len;
 	}
@@ -4822,7 +5073,7 @@ crc = byte_swap_32(crc);
 #endif
 if(crc == fcs->fcs)
 	{
-	fcsframecount++;
+	fcsgoodframecount++;
 	packetlen -= 4;
 	}
 process80211packet(captimestamp, packetlen, packetptr);
@@ -4839,6 +5090,7 @@ static uint64_t timestampcap;
 static uint8_t packet[MAXPACPSNAPLEN];
 
 ancientdumpfileformat = true;
+magicblockcount = 0;
 fprintf(stdout, "%s %s reading from %s...\n", basename(eigenname), VERSION_TAG, basename(pcapinname));
 iface = 1;
 res = read(fd, &pcapfhdr, PCAPHDR_SIZE);
@@ -4869,7 +5121,7 @@ if(pcapfhdr.magic_number == PCAPMAGICNUMBERBE)
 	pcapfhdr.sigfigs	= byte_swap_32(pcapfhdr.sigfigs);
 	pcapfhdr.snaplen	= byte_swap_32(pcapfhdr.snaplen);
 	pcapfhdr.network	= byte_swap_32(pcapfhdr.network);
-	endianess = 1;
+	endianness = 1;
 	}
 
 versionmajor = pcapfhdr.version_major;
@@ -4894,7 +5146,7 @@ if(pcapfhdr.snaplen > MAXPACPSNAPLEN)
 	{
 	pcapreaderrors++;
 	fprintf(stdout, "detected oversized snaplen (%d)\n", pcapfhdr.snaplen);
-	if(fh_log != NULL) fprintf(fh_log, "detected oversized snaplen (%d): %d\n",  pcapfhdr.snaplen, pcapfhdr.version_minor);
+	if(fh_log != NULL) fprintf(fh_log, "detected oversized snaplen (%d): %d\n", pcapfhdr.snaplen, pcapfhdr.version_minor);
 	}
 
 while(1)
@@ -4915,7 +5167,7 @@ while(1)
 	pcaprhdr.incl_len	= byte_swap_32(pcaprhdr.incl_len);
 	pcaprhdr.orig_len	= byte_swap_32(pcaprhdr.orig_len);
 	#endif
-	if(endianess == 1)
+	if(endianness == 1)
 		{
 		pcaprhdr.ts_sec		= byte_swap_32(pcaprhdr.ts_sec);
 		pcaprhdr.ts_usec	= byte_swap_32(pcaprhdr.ts_usec);
@@ -4955,6 +5207,7 @@ while(1)
 	if(pcaprhdr.incl_len > 0)
 		{
 		timestampcap = ((uint64_t)pcaprhdr.ts_sec *1000000) + pcaprhdr.ts_usec;
+		timestampcap *= 1000;
 		processlinktype(timestampcap, pcapfhdr.network, pcaprhdr.incl_len, packet);
 		}
 	}
@@ -4962,10 +5215,9 @@ while(1)
 fprintf(stdout, "\nsummary capture file\n"
 	"--------------------\n"
 	"file name................................: %s\n"
-	"version (pcap/cap).......................: %d.%d (very basic format without any additional information)\n"  
+	"version (pcap/cap).......................: %d.%d (very basic format without any additional information)\n"
 	, basename(pcaporgname), versionmajor, versionminor
 	);
-
 printlinklayerinfo();
 cleanupmac();
 outputdeviceinfolist();
@@ -4979,7 +5231,7 @@ printcontentinfo();
 return;
 }
 /*===========================================================================*/
-int pcapngoptionwalk(uint32_t blocktype, uint8_t *optr, int restlen)
+static int pcapngoptionwalk(uint32_t blocktype, uint8_t *optr, int restlen)
 {
 static int csn, csc, pn;
 static int padding;
@@ -4992,7 +5244,7 @@ while(0 < restlen)
 	option->option_code = byte_swap_16(option->option_code);
 	option->option_length = byte_swap_16(option->option_length);
 	#endif
-	if(endianess == 1)
+	if(endianness == 1)
 		{
 		option->option_code = byte_swap_16(option->option_code);
 		option->option_length = byte_swap_16(option->option_length);
@@ -5000,7 +5252,7 @@ while(0 < restlen)
 	if(option->option_code == SHB_EOC) return 0;
 	padding = 0;
 	if(option->option_length > OPTIONLEN_MAX) return option->option_length;
-	if((option->option_length  %4)) padding = 4 -(option->option_length %4);
+	if((option->option_length %4)) padding = 4 -(option->option_length %4);
 	if(option->option_code == SHB_HARDWARE)
 		{
 		if(option->option_length < OPTIONLEN_MAX)
@@ -5069,7 +5321,7 @@ while(0 < restlen)
 			myaktreplaycount = (myaktreplaycount << 8) + (option->data[0x02] & 0xff);
 			myaktreplaycount = (myaktreplaycount << 8) + (option->data[0x01] & 0xff);
 			myaktreplaycount = (myaktreplaycount << 8) + (option->data[0x00] & 0xff);
-			if(endianess == 1) myaktreplaycount = byte_swap_64(myaktreplaycount);
+			if(endianness == 1) myaktreplaycount = byte_swap_64(myaktreplaycount);
 			}
 		}
 	else if(option->option_code == OPTIONCODE_ANONCE)
@@ -5148,6 +5400,7 @@ static int interfaceid[MAX_INTERFACE_ID];
 static uint8_t pcpngblock[2 *MAXPACPSNAPLEN];
 static uint8_t packet[MAXPACPSNAPLEN];
 
+magicblockcount = 0;
 ancientdumpfileformat = false;
 fprintf(stdout, "%s %s reading from %s...\n", basename(eigenname), VERSION_TAG, basename(pcapinname));
 iface = 0;
@@ -5197,7 +5450,7 @@ while(1)
 		}
 	pcapngbh = (block_header_t*)pcpngblock;
 	blocktype = pcapngbh->block_type;
-	blocklen =  pcapngbh->total_length;
+	blocklen = pcapngbh->total_length;
 	blockmagic = pcapngbh->byte_order_magic;
 	#ifdef BIG_ENDIAN_HOST
 	blocktype = byte_swap_32(blocktype);
@@ -5206,9 +5459,9 @@ while(1)
 	#endif
 	if(blocktype == PCAPNGBLOCKTYPE)
 		{
-		if(blockmagic == PCAPNGMAGICNUMBERBE) endianess = 1;
+		if(blockmagic == PCAPNGMAGICNUMBERBE) endianness = 1;
 		}
-	if(endianess == 1)
+	if(endianness == 1)
 		{
 		blocktype = byte_swap_32(blocktype);
 		blocklen = byte_swap_32(blocklen);
@@ -5251,7 +5504,7 @@ while(1)
 		pcapngshb->minor_version	= byte_swap_16(pcapngshb->minor_version);
 		pcapngshb->section_length	= byte_swap_64(pcapngshb->section_length);
 		#endif
-		if(endianess == 1)
+		if(endianness == 1)
 			{
 			pcapngshb->major_version	= byte_swap_16(pcapngshb->major_version);
 			pcapngshb->minor_version	= byte_swap_16(pcapngshb->minor_version);
@@ -5282,7 +5535,7 @@ while(1)
 		pcapngidb->linktype	= byte_swap_16(pcapngidb->linktype);
 		pcapngidb->snaplen	= byte_swap_32(pcapngidb->snaplen);
 		#endif
-		if(endianess == 1)
+		if(endianness == 1)
 			{
 			pcapngidb->linktype	= byte_swap_16(pcapngidb->linktype);
 			pcapngidb->snaplen	= byte_swap_32(pcapngidb->snaplen);
@@ -5312,7 +5565,7 @@ while(1)
 		#ifdef BIG_ENDIAN_HOST
 		pcapngpb->caplen = byte_swap_32(pcapngpb->caplen);
 		#endif
-		if(endianess == 1) pcapngpb->caplen	= byte_swap_32(pcapngpb->caplen);
+		if(endianness == 1) pcapngpb->caplen	= byte_swap_32(pcapngpb->caplen);
 		timestamppcapng = 0;
 		if(pcapngpb->caplen > MAXPACPSNAPLEN)
 			{
@@ -5344,7 +5597,7 @@ while(1)
 		pcapngepb->caplen		= byte_swap_32(pcapngepb->caplen);
 		pcapngepb->len			= byte_swap_32(pcapngepb->len);
 		#endif
-		if(endianess == 1)
+		if(endianness == 1)
 			{
 			pcapngepb->interface_id		= byte_swap_32(pcapngepb->interface_id);
 			pcapngepb->timestamp_high	= byte_swap_32(pcapngepb->timestamp_high);
@@ -5362,10 +5615,11 @@ while(1)
 		timestamppcapng = pcapngepb->timestamp_high;
 		timestamppcapng = (timestamppcapng << 32) +pcapngepb->timestamp_low;
 
-		if(timeresolval[pcapngepb->interface_id] == TSRESOL_NSEC)
+		if(timeresolval[pcapngepb->interface_id] == TSRESOL_USEC)
 			{
-			timestamppcapng = pcapngepb->timestamp_high / 1000;
+			timestamppcapng = pcapngepb->timestamp_high;
 			timestamppcapng = (timestamppcapng << 32) +pcapngepb->timestamp_low;
+			timestamppcapng *= 1000;
 			}
 		if(pcapngepb->caplen != pcapngepb->len)
 			{
@@ -5412,6 +5666,7 @@ while(1)
 			skippedpacketcount++;
 			continue;
 			}
+		magicblockcount++;
 		if(pcapngoptionwalk(blocktype, pcapngcb->data, blocklen -CB_SIZE) != 0) pcapreaderrors++;
 		}
 	else
@@ -5419,7 +5674,6 @@ while(1)
 		skippedpacketcount++;
 		}
 	}
-
 fprintf(stdout, "\nsummary capture file\n"
 	"--------------------\n"
 	"file name................................: %s\n"
@@ -5432,7 +5686,7 @@ fprintf(stdout, "\nsummary capture file\n"
 	"weak candidate...........................: %s\n"
 	"MAC ACCESS POINT.........................: %02x%02x%02x%02x%02x%02x (incremented on every new client)\n"
 	"MAC CLIENT...............................: %02x%02x%02x%02x%02x%02x\n"
-	"REPLAYCOUNT..............................: %"  PRIu64  "\n"
+	"REPLAYCOUNT..............................: %" PRIu64 "\n"
 	"ANONCE...................................: %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n"
 	"SNONCE...................................: %02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x\n"
 	, basename(pcaporgname), versionmajor, versionminor,
@@ -5451,7 +5705,6 @@ fprintf(stdout, "\nsummary capture file\n"
 	myaktsnonce[16], myaktsnonce[17], myaktsnonce[18], myaktsnonce[19], myaktsnonce[20], myaktsnonce[21], myaktsnonce[22], myaktsnonce[23],
 	myaktsnonce[24], myaktsnonce[25], myaktsnonce[26], myaktsnonce[27], myaktsnonce[28], myaktsnonce[29], myaktsnonce[30], myaktsnonce[31]
 	);
-
 printlinklayerinfo();
 cleanupmac();
 outputdeviceinfolist();
@@ -5463,6 +5716,20 @@ outputeapmschapv2hashlist();
 outputtacacsplist();
 printcontentinfo();
 return;
+}
+/*===========================================================================*/
+static bool processtrackfile(char *trackinname)
+{
+static FILE *fh_trackin;
+
+if((fh_trackin = fopen(trackinname, "r")) == NULL)
+	{
+
+	}
+
+
+fclose(fh_trackin);
+return true;
 }
 /*===========================================================================*/
 static bool processcapfile(char *eigenname, char *pcapinname)
@@ -5520,7 +5787,7 @@ if(magicnumber == PCAPNGBLOCKTYPE)
 	}
 else if((magicnumber == PCAPMAGICNUMBER) || (magicnumber == PCAPMAGICNUMBERBE))
 	{
-	if(magicnumber == PCAPMAGICNUMBERBE) endianess = 1;
+	if(magicnumber == PCAPMAGICNUMBERBE) endianness = 1;
 	if(initlists() == true)
 		{
 		processcap(fd_pcap, eigenname, pcapinname, pcapnameptr);
@@ -5540,39 +5807,6 @@ if(pcaptempnameptr != NULL) remove(pcaptempnameptr);
 return true;
 }
 /*===========================================================================*/
-static inline size_t chop(char *buffer, size_t len)
-{
-static char *ptr;
-
-ptr = buffer +len -1;
-while(len)
-	{
-	if(*ptr != '\n') break;
-	*ptr-- = 0;
-	len--;
-	}
-while(len)
-	{
-	if(*ptr != '\r') break;
-	*ptr-- = 0;
-	len--;
-	}
-return len;
-}
-/*---------------------------------------------------------------------------*/
-static inline int fgetline(FILE *inputstream, size_t size, char *buffer)
-{
-static size_t len;
-static char *buffptr;
-
-if(feof(inputstream)) return -1;
-buffptr = fgets (buffer, size, inputstream);
-if(buffptr == NULL) return -1;
-len = strlen(buffptr);
-len = chop(buffptr, len);
-return len;
-}
-/*===========================================================================*/
 static bool processrawfile(char *rawinname)
 {
 static int len;
@@ -5588,7 +5822,7 @@ uint8_t idx1;
 static char *csptr;
 static char *stopptr = NULL;
 
-uint8_t hashmap[] =
+static uint8_t hashmap[] =
 {
 0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, // 01234567
 0x08, 0x09, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, // 89:;<=>?
@@ -5749,6 +5983,70 @@ fprintf(stdout, "same file names for different file types is not allowed: %s - %
 return true;
 }
 /*===========================================================================*/
+static bool evpdeinitwpa(void)
+{
+if(ctxhmac != NULL)
+	{
+	EVP_MAC_CTX_free(ctxhmac);
+	EVP_MAC_free(hmac);
+	}
+if(ctxcmac != NULL)
+	{
+	EVP_MAC_CTX_free(ctxcmac);
+	EVP_MAC_free(cmac);
+	}
+EVP_cleanup();
+CRYPTO_cleanup_all_ex_data();
+ERR_free_strings();
+return true;
+}
+/*===========================================================================*/
+static bool evpinitwpa(void)
+{
+static unsigned long opensslversion;
+
+ERR_load_crypto_strings();
+OpenSSL_add_all_algorithms();
+ERR_load_crypto_strings();
+OpenSSL_add_all_algorithms();
+opensslversion = OpenSSL_version_num();
+opensslversionmajor = (opensslversion & 0x10000000L) >> 28;
+opensslversionminor = (opensslversion & 0x01100000L) >> 20;
+
+
+hmac = NULL;
+ctxhmac = NULL;
+cmac = NULL;
+ctxcmac = NULL;
+
+hmac = EVP_MAC_fetch(NULL, "hmac", NULL);
+if(hmac == NULL) return false;
+cmac = EVP_MAC_fetch(NULL, "cmac", NULL);
+if(cmac == NULL) return false;
+
+char md5[] = "md5";
+paramsmd5[0] = OSSL_PARAM_construct_utf8_string("digest", md5, 0);
+paramsmd5[1] = OSSL_PARAM_construct_end();
+
+char sha1[] = "sha1";
+paramssha1[0] = OSSL_PARAM_construct_utf8_string("digest", sha1, 0);
+paramssha1[1] = OSSL_PARAM_construct_end();
+
+char sha256[] = "sha256";
+paramssha256[0] = OSSL_PARAM_construct_utf8_string("digest", sha256, 0);
+paramssha256[1] = OSSL_PARAM_construct_end();
+
+char aes[] = "aes-1280-cbc";
+paramsaes128[0] = OSSL_PARAM_construct_utf8_string("cipher", aes, 0);
+paramsaes128[1] = OSSL_PARAM_construct_end();
+
+ctxhmac = EVP_MAC_CTX_new(hmac);
+if(ctxhmac == NULL) return false;
+ctxcmac = EVP_MAC_CTX_new(cmac);
+if(ctxcmac == NULL) return false;
+return true;
+}
+/*===========================================================================*/
 __attribute__ ((noreturn))
 void version(char *eigenname)
 {
@@ -5779,7 +6077,7 @@ fprintf(stdout, "%s %s (C) %s ZeroBeat\n"
 	"-I <file> : output unsorted identity list to use as input wordlist for cracker\n"
 	"-U <file> : output unsorted username list to use as input wordlist for cracker\n"
 	"-D <file> : output device information list\n"
-	"            format MAC MANUFACTURER MODELNAME SERIALNUMBER DEVICENAME UUID\n"
+	"            format MAC MANUFACTURER MODELNAME SERIALNUMBER DEVICENAME UUID ESSID\n"
 	"-h        : show this help\n"
 	"-v        : show version\n"
 	"\n"
@@ -5789,7 +6087,7 @@ fprintf(stdout, "%s %s (C) %s ZeroBeat\n"
 	"                                     use hcxhashtool to filter hashes\n"
 	"                                     need hashcat --nonce-error-corrections >= 8\n"
 	"--eapoltimeout=<digit>             : set EAPOL TIMEOUT (milliseconds)\n"
-	"                                   : default: %d ms\n"
+	"                                   : default: %llu ms\n"
 	"--nonce-error-corrections=<digit>  : set nonce error correction\n"
 	"                                     warning: values > 0 can lead to uncrackable handshakes\n"
 	"                                   : default: %d\n"
@@ -5803,8 +6101,11 @@ fprintf(stdout, "%s %s (C) %s ZeroBeat\n"
 	"--eapmd5=<file>                    : output EAP MD5 CHALLENGE (hashcat -m 4800)\n"
 	"--eapmd5-john=<file>               : output EAP MD5 CHALLENGE (john chap)\n"
 	"--eapleap=<file>                   : output EAP LEAP and MSCHAPV2 CHALLENGE (hashcat -m 5500, john netntlm)\n"
-	"--tacacs-plus=<file>               : output TACACS PLUS (hashcat -m 16100, john tacacs-plus)\n"
-	"--nmea=<file>                      : output GPS data in NMEA format\n"
+	"--tacacs-plus=<file>               : output TACACS PLUS v1 (hashcat -m 16100, john tacacs-plus)\n"
+//	"--track=<file>                     : input TRACK file (No,Latitude,Longitude,Altitude,Date,Time)\n"
+//	"                                      gpsbabel -t -i GPS_IN_FORMAT -f GPS_IN_FILE -o unicsv -F TRACK_FILE\n"
+//	"                                      gpsbabel -t -i GPS_IN_FORMAT -f GPS_IN_FILE -x track,move=TIME_ADJUST_TO_SYSTEM_CLOCKTIME -o unicsv -F TRACK_FILE\n"
+	"--nmea=<file>                      : output GPS data in NMEA 0183 format\n"
 	"                                     format: NMEA 0183 $GPGGA, $GPRMC, $GPWPL\n"
 	"                                     to convert it to gpx, use GPSBabel:\n"
 	"                                     gpsbabel -i nmea -f hcxdumptool.nmea -o gpx,gpxver=1.1 -F hcxdumptool.gpx\n"
@@ -5813,7 +6114,6 @@ fprintf(stdout, "%s %s (C) %s ZeroBeat\n"
 	"                                     delimiter: tabulator (0x08)\n"
 	"                                     columns:\n"
 	"                                     YYYY-MM-DD HH:MM:SS MAC_AP ESSID ENC_TYPE CIPHER AKM COUNTRY_INFO CHANNEL RSSI GPS(DM.m) GPS(D.d) GPSFIX SATCOUNT HDOP ALTITUDE UNIT\n"
-	"                                     to convert it to other formats, use bash tools or scripting languages\n"
 	"                                     GPS FIX:\n"
 	"                                     0 = fix not available or invalid\n"
 	"                                     1 = fix valid (GPS SPS mode)\n"
@@ -5822,52 +6122,72 @@ fprintf(stdout, "%s %s (C) %s ZeroBeat\n"
 	"                                     4 = not supported\n"
 	"                                     5 = not supported\n"
 	"                                     6 = fix valid (Dead Reckoning Mode)\n"
-	"--log=<file>                       : output logfile\n"
+	"                                     to convert it to other formats, use bash tools or scripting languages\n"
+	"\n", eigenname, VERSION_TAG, VERSION_YEAR, eigenname, eigenname, eigenname, eigenname, eigenname, eigenname,
+	EAPOLTIMEOUT / 1000000, NONCEERRORCORRECTION, ESSIDSMAX);
+
+fprintf(stdout, "--log=<file>                       : output logfile\n"
 	"--raw-out=<file>                   : output frames in HEX ASCII\n"
 	"                                   : format: TIMESTAMP*LINKTYPE*FRAME*CHECKSUM\n"
 	"--raw-in=<file>                    : input frames in HEX ASCII\n"
 	"                                   : format: TIMESTAMP*LINKTYPE*FRAME*CHECKSUM\n"
-	"--pmkid=<file>                     : output deprecated PMKID file (delimter *)\n"
+	"--lts=<file>                       : output BSSID list to sync with external GPS data\n"
+	"                                     format: LINUX timestamp <tab> RSSI <tab> MAC_AP <tab> ESSID\n"
+	"--pmkid-client=<file>              : output WPA-(MESH/REPEATER)-PMKID hash file (hashcat -m 22000)\n"
+	"--pmkid=<file>                     : output deprecated PMKID file (delimiter *)\n"
 	"--hccapx=<file>                    : output deprecated hccapx v4 file\n"
 	"--hccap=<file>                     : output deprecated hccap file\n"
-	"--john=<file>                      : output deprecated PMKID/EAPOL (JtR wpapsk-opencl/wpapsk-pmk-opencl)\n"
-	"--prefix=<file>                    : convert everything to lists using this prefix (overrides single options):\n"
+	"--john=<file>                      : output deprecated PMKID/EAPOL (JtR wpapsk-opencl/wpapsk-pmk-opencl)\n");
+
+fprintf(stdout, "--prefix=<file>                    : convert everything to lists using this prefix (overrides single options):\n"
 	"                                      -o <file.22000>           : output PMKID/EAPOL hash file\n"
 	"                                      -E <file.essid>           : output wordlist (autohex enabled on non ASCII characters) to use as input wordlist for cracker\n"
-	"                                      -I <file.identitiy>       : output unsorted identity list to use as input wordlist for cracker\n"
+	"                                      -I <file.identity>        : output unsorted identity list to use as input wordlist for cracker\n"
 	"                                      -U <file.username>        : output unsorted username list to use as input wordlist for cracker\n"
 	"                                     --eapmd5=<file.4800>       : output EAP MD5 CHALLENGE (hashcat -m 4800)\n"
 	"                                     --eapleap=<file.5500>      : output EAP LEAP and MSCHAPV2 CHALLENGE (hashcat -m 5500, john netntlm)\n"
 	"                                     --tacacs-plus=<file.16100> : output TACACS+ (hashcat -m 16100, john tacacs-plus)\n"
-	"                                     --nmea=<file.nmea>         : output GPS data in NMEA format\n"
+	"                                     --nmea=<file.nmea>         : output GPS data in NMEA 0183 format\n"
+	"--add-timestamp                    : add date/time and EAPOL TIME gap (time between two EAPOL MESSAGEs in nsec) to hash line\n"
+	"                                     this must be filtered out before feeding hashcat with the hash, e.g. by awk:\n"
+	"                                     cat hash.hc22000 | awk '{print $1}' > hashremovedtimestamp.hc22000\n"
 	"--help                             : show this help\n"
 	"--version                          : show version\n"
+
+"bitmask of PMKID hash line (WPA*01) message pair field:\n"
+	"0: reserved\n"
+	"1: PMKID taken from AP\n"
+	"2: PMKID taken from AP possible PSKSHA256 FT using PSK\n"
+	"3: reserved\n"
+	"4: PMKID taken from CLIENT (wlan.da: possible MESH or REPEATER)\n"
+	"5: reserved\n"
+	"6: reserved\n"
+	"7: reserved\n"
 	"\n"
-	"bitmask of message pair field:\n"
+	"bitmask of EAPOL hash line (WPA*02) message pair field:\n"
 	"2,1,0:\n"
 	" 000 = M1+M2, EAPOL from M2 (challenge)\n"
 	" 001 = M1+M4, EAPOL from M4 (authorized) - usable if NONCE_CLIENT is not zeroed \n"
 	" 010 = M2+M3, EAPOL from M2 (authorized)\n"
-	" 011 = M2+M3, EAPOL from M3 (authorized) - unused\n"
-	" 100 = M3+M4, EAPOL from M3 (authorized) - unused\n"
+	" 011 = M2+M3, EAPOL from M3 (authorized) - usable by option --all\n"
+	" 100 = M3+M4, EAPOL from M3 (authorized) - usable by option --all\n"
 	" 101 = M3+M4, EAPOL from M4 (authorized) - usable if NONCE_CLIENT is not zeroed\n"
 	"3: reserved\n"
-	"4: ap-less attack (set to 1) - nonce-error-corrections not required\n"
+	"4: NC (set to 1) - nonce-error-corrections deactivated on M1M2ROGUE, M2M3E3 and M3M4E3\n"
 	"5: LE router detected (set to 1) - nonce-error-corrections required only on LE\n"
 	"6: BE router detected (set to 1) - nonce-error-corrections required only on BE\n"
-	"7: not replaycount checked (set to 1) - replaycount not checked, nonce-error-corrections mandatory\n"
+	"7: NC (set to 1) - nonce-error-corrections activated\n"
 	"\n"
 	"Do not edit, merge or convert pcapng files! This will remove optional comment fields!\n"
 	"Detection of bit errors does not work on cleaned dump files!\n"
 	"Do not use %s in combination with third party cap/pcap/pcapng cleaning tools (except: tshark and/or Wireshark)!\n"
 	"It is much better to run gzip to compress the files. Wireshark, tshark and hcxpcapngtool will understand this.\n"
+	"Output is appended to existing files.\n"
 	"Recommended tools to show additional 802.11 fields or to decrypt WiFi traffic: Wireshark and/or tshark\n"
 	"Recommended tool to filter converted hash by several options: hcxhashtool\n"
 	"Recommended tool to get default or standard PSKs: hcxpsktool\n"
 	"Recommended tool to calculate wordlists based on ESSID: hcxeiutool\n"
-	"Recommended tools to retrieve PSK from hash: hashcat, JtR\n"
-	"\n", eigenname, VERSION_TAG, VERSION_YEAR, eigenname, eigenname, eigenname, eigenname, eigenname, eigenname,
-	EAPOLTIMEOUT /1000, NONCEERRORCORRECTION, ESSIDSMAX,
+	"Recommended tools to retrieve PSK from hash: hashcat, JtR\n",
 	eigenname);
 exit(EXIT_SUCCESS);
 }
@@ -5886,6 +6206,7 @@ static int auswahl;
 static int index;
 static int exitcode;
 static char *pmkideapoloutname;
+static char *pmkidclientoutname;
 static char *eapmd5outname;
 static char *eapmd5johnoutname;
 static char *eapleapoutname;
@@ -5895,10 +6216,12 @@ static char *essidproberequestoutname;
 static char *deviceinfooutname;
 static char *identityoutname;
 static char *usernameoutname;
+static char *trackinname;
 static char *nmeaoutname;
 static char *csvoutname;
 static char *logoutname;
 static char *rawoutname;
+static char *ltsoutname;
 static char *rawinname;
 static char *pmkideapoljtroutnamedeprecated;
 static char *pmkidoutnamedeprecated;
@@ -5941,11 +6264,14 @@ static const struct option long_options[] =
 	{"nonce-error-corrections",	required_argument,	NULL,	HCX_NC},
 	{"ignore-ie",			no_argument,		NULL,	HCX_IE},
 	{"max-essids",			required_argument,	NULL,	HCX_ESSIDS},
+	{"track-in",			required_argument,	NULL,	HCX_TRACK_IN},
 	{"nmea",			required_argument,	NULL,	HCX_NMEA_OUT},
 	{"csv",				required_argument,	NULL,	HCX_CSV_OUT},
 	{"raw-out",			required_argument,	NULL,	HCX_RAW_OUT},
 	{"raw-in",			required_argument,	NULL,	HCX_RAW_IN},
+	{"lts",				required_argument,	NULL,	HCX_LTS},
 	{"log",				required_argument,	NULL,	HCX_LOG_OUT},
+	{"pmkid-client",		required_argument,	NULL,	HCX_PMKID_CLIENT_OUT},
 	{"pmkid",			required_argument,	NULL,	HCX_PMKID_OUT_DEPRECATED},
 	{"eapmd5",			required_argument,	NULL,	HCX_EAPMD5_OUT},
 	{"eapmd5-john",			required_argument,	NULL,	HCX_EAPMD5_JOHN_OUT},
@@ -5955,6 +6281,7 @@ static const struct option long_options[] =
 	{"hccap",			required_argument,	NULL,	HCX_HCCAP_OUT_DEPRECATED},
 	{"john",			required_argument,	NULL,	HCX_PMKIDEAPOLJTR_OUT_DEPRECATED},
 	{"prefix",			required_argument,	NULL,	HCX_PREFIX_OUT},
+	{"add-timestamp",		no_argument,		NULL,	HCX_ADD_TIMESTAMP},
 	{"version",			no_argument,		NULL,	HCX_VERSION},
 	{"help",			no_argument,		NULL,	HCX_HELP},
 	{NULL,				0,			NULL,	0}
@@ -5965,6 +6292,7 @@ index = 0;
 optind = 1;
 optopt = 0;
 exitcode = EXIT_SUCCESS;
+addtimestampflag = false;
 ignoreieflag = false;
 donotcleanflag = false;
 eapoltimeoutvalue = EAPOLTIMEOUT;
@@ -5981,10 +6309,12 @@ essidproberequestoutname = NULL;
 identityoutname = NULL;
 usernameoutname = NULL;
 deviceinfooutname = NULL;
+trackinname = NULL;
 nmeaoutname = NULL;
 csvoutname = NULL;
 logoutname = NULL;
 rawoutname = NULL;
+ltsoutname = NULL;
 rawinname = NULL;
 prefixoutname = NULL;
 pmkideapoljtroutnamedeprecated = NULL;
@@ -5993,6 +6323,7 @@ hccapxoutnamedeprecated = NULL;
 hccapoutnamedeprecated = NULL;
 
 fh_pmkideapol = NULL;
+fh_pmkideapolclient = NULL;
 fh_eapmd5 = NULL;
 fh_eapmd5john = NULL;
 fh_eapleap = NULL;
@@ -6006,6 +6337,7 @@ fh_nmea = NULL;
 fh_csv = NULL;
 fh_log = NULL;
 fh_raw_out = NULL;
+fh_lts = NULL;
 fh_pmkideapoljtrdeprecated = NULL;
 fh_pmkiddeprecated = NULL;
 fh_hccapxdeprecated = NULL;
@@ -6025,7 +6357,7 @@ while((auswahl = getopt_long (argc, argv, short_options, long_options, &index)) 
 			fprintf(stderr, "EAPOL TIMEOUT must be > 0\n");
 			exit(EXIT_FAILURE);
 			}
-		eapoltimeoutvalue *= 1000;
+		eapoltimeoutvalue *= 1000000;
 		break;
 
 		case HCX_NC:
@@ -6048,6 +6380,10 @@ while((auswahl = getopt_long (argc, argv, short_options, long_options, &index)) 
 		pmkideapoloutname = optarg;
 		break;
 
+		case HCX_PMKID_CLIENT_OUT:
+		pmkidclientoutname = optarg;
+		break;
+
 		case HCX_EAPMD5_OUT:
 		eapmd5outname = optarg;
 		break;
@@ -6068,6 +6404,10 @@ while((auswahl = getopt_long (argc, argv, short_options, long_options, &index)) 
 		essidoutname = optarg;
 		break;
 
+		case HCX_LTS:
+		ltsoutname = optarg;
+		break;
+
 		case HCX_ESSIDPROBEREQUEST_OUT:
 		essidproberequestoutname = optarg;
 		break;
@@ -6082,6 +6422,10 @@ while((auswahl = getopt_long (argc, argv, short_options, long_options, &index)) 
 
 		case HCX_DEVICEINFO_OUT:
 		deviceinfooutname = optarg;
+		break;
+
+		case HCX_TRACK_IN:
+		trackinname = optarg;
 		break;
 
 		case HCX_NMEA_OUT:
@@ -6102,6 +6446,10 @@ while((auswahl = getopt_long (argc, argv, short_options, long_options, &index)) 
 
 		case HCX_LOG_OUT:
 		logoutname = optarg;
+		break;
+
+		case HCX_ADD_TIMESTAMP:
+		addtimestampflag = true;
 		break;
 
 		case HCX_PMKIDEAPOLJTR_OUT_DEPRECATED:
@@ -6148,8 +6496,8 @@ timestampstart = ((uint64_t)tv.tv_sec *1000000) + tv.tv_usec;
 
 if(argc < 2)
 	{
-	fprintf(stdout, "no option selected\n");
-	return EXIT_SUCCESS;
+	fprintf(stderr, "no option selected\nrun %s --help to get more information\n", (basename(argv[0])));
+	exit(EXIT_FAILURE);
 	}
 
 if((optind == argc) && (rawinname == NULL))
@@ -6157,6 +6505,8 @@ if((optind == argc) && (rawinname == NULL))
 	fprintf(stdout, "no input file(s) selected\n");
 	exit(EXIT_FAILURE);
 	}
+
+if(evpinitwpa() == false) exit(EXIT_FAILURE);
 
 if(testfilename(pmkideapoloutname, essidoutname) == true) exit(EXIT_FAILURE);
 if(testfilename(pmkideapoloutname, essidproberequestoutname) == true) exit(EXIT_FAILURE);
@@ -6334,6 +6684,14 @@ if(essidoutname != NULL)
 		exit(EXIT_FAILURE);
 		}
 	}
+if(ltsoutname != NULL)
+	{
+	if((fh_lts = fopen(ltsoutname, "a")) == NULL)
+		{
+		fprintf(stdout, "error opening file %s: %s\n", ltsoutname, strerror(errno));
+		exit(EXIT_FAILURE);
+		}
+	}
 if(essidproberequestoutname != NULL)
 	{
 	if((fh_essidproberequest = fopen(essidproberequestoutname, "a")) == NULL)
@@ -6399,6 +6757,15 @@ if(logoutname != NULL)
 		}
 	}
 
+if(pmkidclientoutname != NULL)
+	{
+	if((fh_pmkideapolclient = fopen(pmkidclientoutname, "a")) == NULL)
+		{
+		fprintf(stdout, "error opening file %s: %s\n", pmkidclientoutname, strerror(errno));
+		exit(EXIT_FAILURE);
+		}
+	}
+
 if(pmkideapoljtroutnamedeprecated != NULL)
 	{
 	if((fh_pmkideapoljtrdeprecated = fopen(pmkideapoljtroutnamedeprecated, "a")) == NULL)
@@ -6433,6 +6800,11 @@ if(hccapoutnamedeprecated != NULL)
 		}
 	}
 
+if(trackinname != NULL)
+	{
+	if(processtrackfile(trackinname) == false) exitcode = EXIT_FAILURE;
+	}
+
 for(index = optind; index < argc; index++)
 	{
 	if(processcapfile(argv[0], argv[index]) == false) exitcode = EXIT_FAILURE;
@@ -6441,6 +6813,7 @@ for(index = optind; index < argc; index++)
 if(rawinname != NULL) processrawfile(rawinname);
 
 if(fh_pmkideapol != NULL) fclose(fh_pmkideapol);
+if(fh_pmkideapolclient != NULL) fclose(fh_pmkideapolclient);
 if(fh_eapmd5 != NULL) fclose(fh_eapmd5);
 if(fh_eapmd5john != NULL) fclose(fh_eapmd5john);
 if(fh_eapleap != NULL) fclose(fh_eapleap);
@@ -6453,6 +6826,7 @@ if(fh_deviceinfo != NULL) fclose(fh_deviceinfo);
 if(fh_nmea != NULL) fclose(fh_nmea);
 if(fh_csv != NULL) fclose(fh_csv);
 if(fh_raw_out != NULL) fclose(fh_raw_out);
+if(fh_lts != NULL) fclose(fh_lts);
 if(fh_log != NULL) fclose(fh_log);
 if(fh_pmkideapoljtrdeprecated != NULL) fclose(fh_pmkideapoljtrdeprecated);
 if(fh_pmkiddeprecated != NULL) fclose(fh_pmkiddeprecated);
@@ -6464,6 +6838,13 @@ if(pmkideapoloutname != NULL)
 	if(stat(pmkideapoloutname, &statinfo) == 0)
 		{
 		if(statinfo.st_size == 0) remove(pmkideapoloutname);
+		}
+	}
+if(pmkidclientoutname != NULL)
+	{
+	if(stat(pmkidclientoutname, &statinfo) == 0)
+		{
+		if(statinfo.st_size == 0) remove(pmkidclientoutname);
 		}
 	}
 if(eapmd5outname != NULL)
@@ -6592,6 +6973,7 @@ if(gzipstat > 0)		fprintf(stdout, "gzip compressed dump files............: %d\n"
 if(pcapngstat > 0)		fprintf(stdout, "processed pcapng files................: %d\n", pcapngstat);
 if(capstat > 0)			fprintf(stdout, "processed cap files...................: %d\n", capstat);
 fprintf(stdout, "\n");
+if(evpdeinitwpa() == false) exit(EXIT_FAILURE);
 return exitcode;
 }
 /*===========================================================================*/

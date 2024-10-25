@@ -1,11 +1,13 @@
 #define _GNU_SOURCE
+#include <fcntl.h>
 #include <stdbool.h>
 #include <stdint.h>
-#include <fcntl.h>
 #include <string.h>
-#include <unistd.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <unistd.h>
+#include <stdio.h>
+#include <time.h>
 
 #include "fileops.h"
 /*===========================================================================*/
@@ -89,7 +91,7 @@ int p;
 
 fprintf(fhd, "\t");
 if(deviceinfostr[0] == 0) return;
-if(isasciistring2(len, deviceinfostr) != false) fprintf(fhd, "%.*s", len, deviceinfostr);
+if(isasciistring(len, deviceinfostr) != false) fprintf(fhd, "%.*s", len, deviceinfostr);
 else
 	{
 	fprintf(fhd, "$HEX[");
@@ -142,5 +144,37 @@ if(statinfo.st_size == 0)
 	return;
 	}
 return;
+}
+/*===========================================================================*/
+static size_t chop(char *buffer,  size_t len)
+{
+static char *ptr;
+
+ptr = buffer +len -1;
+while (len) {
+	if (*ptr != '\n') break;
+	*ptr-- = 0;
+	len--;
+	}
+
+while (len) {
+	if (*ptr != '\r') break;
+	*ptr-- = 0;
+	len--;
+	}
+return len;
+}
+/*---------------------------------------------------------------------------*/
+static inline int fgetline(FILE *inputstream, size_t size, char *buffer)
+{
+static size_t len;
+static char *buffptr;
+
+if(feof(inputstream)) return -1;
+buffptr = fgets (buffer, size, inputstream);
+if(buffptr == NULL) return -1;
+len = strlen(buffptr);
+len = chop(buffptr, len);
+return len;
 }
 /*===========================================================================*/

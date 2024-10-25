@@ -1,30 +1,24 @@
-#define HCX_HASHLINE	'i'
-#define HCX_ESSID	'e'
+#define HCX_HASHLINE	'l'
 #define HCX_PSK		'p'
-#define HCX_PMK		'm'
 
 #define HCX_HELP	'h'
 #define HCX_VERSION	'v'
 
-#define ESSID_LEN_MAX		32
-#define EAPOL_AUTHLEN_MAX	256
-#define PMK_LEN			32
-#define HASH_LEN		16
-/*===========================================================================*/
-typedef struct
-{
- uint8_t		type;
-#define HS_PMKID	1
-#define HS_EAPOL	2
- uint8_t		hash[HASH_LEN];
- uint8_t		ap[6];
- uint8_t		client[6];
- uint8_t		essidlen;
- uint8_t		essid[ESSID_LEN_MAX];
- uint8_t		nonce[32];
- uint16_t		eapauthlen;
- uint8_t		eapol[EAPOL_AUTHLEN_MAX];
- uint8_t		mp;
-} hashlist_t;
-#define	HASHLIST_SIZE (sizeof(hashlist_t))
+#define HAS_PMKID_LINE	0x0001
+#define HAS_EAPOL_LINE	0x0002
+#define HAS_ESSID	0x0004
+#define HAS_MACAP	0x0008
+#define HAS_MACCLIENT	0x0010
+#define HAS_PSK		0x0020
+#define HAS_PMK		0x0040
+#define HAS_PMK_CALC	0x0080
+#define HAS_PMKID	0x0100
+#define HAS_PMKID_CALC	0x0200
+#define HAS_MIC		0x0400
+#define HAS_MIC_CALC	0x0800
+#define HAS_PTK_CALC	0x1000
+
+#define EAPOL_AUTHLEN_MAX		256
+#define EXIT_SUCCESS_CONFIRMED		0
+#define EXIT_SUCCESS_UNCONFIRMED	2
 /*===========================================================================*/

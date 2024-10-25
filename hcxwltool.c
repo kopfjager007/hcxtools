@@ -1,16 +1,16 @@
 #define _GNU_SOURCE
 #include <ctype.h>
 #include <getopt.h>
-#include <stdarg.h>
-#include <stdint.h>
+#include <libgen.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <libgen.h>
-#include <sys/types.h>
-#include <stdbool.h>
+#include <unistd.h>
 
 #include "include/hcxwltool.h"
+#include "include/strings.c"
+#include "include/fileops.c"
 
 /*===========================================================================*/
 /* global variable */
@@ -27,7 +27,7 @@ static void printstraightlower(FILE *fh_out, int len, char *linein)
 {
 static int p,px;
 
-static char lineout[LINEIN_MAX] = {};
+static char lineout[LINEIN_MAX] = { 0 };
 
 px = 0;
 for(p = 0; p < len; p++)
@@ -58,7 +58,7 @@ static void printstraightupper(FILE *fh_out, int len, char *linein)
 {
 static int p, px;
 
-static char lineout[LINEIN_MAX] = {};
+static char lineout[LINEIN_MAX] = { 0 };
 
 px = 0;
 for(p = 0; p < len; p++)
@@ -89,7 +89,7 @@ static void printstraightcapital(FILE *fh_out, int len, char *linein)
 {
 static int p,px;
 
-static char lineout[LINEIN_MAX] = {};
+static char lineout[LINEIN_MAX] = { 0 };
 
 px = 0;
 for(p = 0; p < len; p++)
@@ -128,7 +128,7 @@ return;
 static void printstraigthsweep(FILE *fh_out, int slen, int len, char *linein)
 {
 static int l;
-static char lineout[LINEIN_MAX] = {};
+static char lineout[LINEIN_MAX] = { 0 };
 
 if(len >= slen)
 	{
@@ -189,7 +189,7 @@ static void printxdigitlower(FILE *fh_out, int len, char *linein)
 {
 static int p, pd;
 
-static char lineout[LINEIN_MAX] = {};
+static char lineout[LINEIN_MAX] = { 0 };
 
 pd = 0;
 for(p = 0; p < len; p++)
@@ -220,7 +220,7 @@ static void printxdigitupper(FILE *fh_out, int len, char *linein)
 {
 static int p, pd;
 
-static char lineout[LINEIN_MAX] = {};
+static char lineout[LINEIN_MAX] = { 0 };
 
 pd = 0;
 for(p = 0; p < len; p++)
@@ -270,7 +270,7 @@ return;
 static void printxdigitsweep(FILE *fh_out, int slen, int len, char *linein)
 {
 static int l;
-static char lineout[LINEIN_MAX] = {};
+static char lineout[LINEIN_MAX] = { 0 };
 
 if(len >= slen)
 	{
@@ -298,7 +298,7 @@ return;
 static void handlexdigit(FILE *fh_out, int len, char *linein)
 {
 static int i, o;
-static char lineout[LINEIN_MAX] = {};
+static char lineout[LINEIN_MAX] = { 0 };
 
 o = 0;
 for(i = 0; i < len; i++)
@@ -341,7 +341,7 @@ return;
 static void printdigitsweep(FILE *fh_out, int slen, int len, char *linein)
 {
 static int l;
-static char lineout[LINEIN_MAX] = {};
+static char lineout[LINEIN_MAX] = { 0 };
 
 if(len >= slen)
 	{
@@ -358,7 +358,7 @@ return;
 static void handledigit(FILE *fh_out, int len, char *linein)
 {
 static int i, o;
-static char lineout[LINEIN_MAX] = {};
+static char lineout[LINEIN_MAX] = { 0 };
 
 o = 0;
 for(i = 0; i < len; i++)
@@ -389,17 +389,17 @@ return;
 static int handleignore(int len, char *linein)
 {
 
-static char *wlan = "WLAN-";
-static char *skyroam = "#Skyroam_";
-static char *huitube3 = "3HuiTube_";
-static char *pocket3 = "3Pocket_";
-static char *mobilewifi3 = "3MobileWiFi-";
-static char *tube3 = "3Tube_";
-static char *web3 = "3Web";
-static char *webcube = "WebCube";
-static char *neo3 = "3neo_";
+static const char *wlan = "WLAN-";
+static const char *skyroam = "#Skyroam_";
+static const char *huitube3 = "3HuiTube_";
+static const char *pocket3 = "3Pocket_";
+static const char *mobilewifi3 = "3MobileWiFi-";
+static const char *tube3 = "3Tube_";
+static const char *web3 = "3Web";
+static const char *webcube = "WebCube";
+static const char *neo3 = "3neo_";
 
-static char *wifi4g = "4G Wi-Fi 3Danmark-";
+static const char *wifi4g = "4G Wi-Fi 3Danmark-";
 
 if(len == 11)
 	{
@@ -513,7 +513,7 @@ return len;
 /*===========================================================================*/
 static int handlehex(int len, char *line)
 {
-static char *token = "$HEX[";
+static const char *token = "$HEX[";
 
 if(len >= 6)
 	{
@@ -522,43 +522,6 @@ if(len >= 6)
 		return 0;
 		}
 	}
-return len;
-}
-/*===========================================================================*/
-static size_t chop(char *buffer, size_t len)
-{
-static char *ptr;
-
-ptr = buffer +len -1;
-while(len)
-	{
-	if (*ptr != '\n')
-		break;
-	*ptr-- = 0;
-	len--;
-	}
-while(len)
-	{
-	if (*ptr != '\r')
-		break;
-	*ptr-- = 0;
-	len--;
-	}
-return len;
-}
-/*---------------------------------------------------------------------------*/
-static int fgetline(FILE *fh_in, size_t size, char *buffer)
-{
-static size_t len;
-static char *buffptr;
-
-if(feof(fh_in))
-	return -1;
-buffptr = fgets (buffer, size, fh_in);
-if(buffptr == NULL)
-	return -1;
-len = strlen(buffptr);
-len = chop(buffptr, len);
 return len;
 }
 /*===========================================================================*/
@@ -640,8 +603,8 @@ fprintf(stdout, "%s %s (C) %s ZeroBeat\n"
 	"--version        : show version\n"
 	"\n"
 	"examples:\n"
-	"hcxwltool -i wordlist --straight | sort | uniq |  | sort | uniq | hashcat -m 22000 hashfile.hc22000\n"
-	"hcxwltool -i wordlist --digit --length=10 | sort | uniq |  | sort | uniq | hashcat -m 22000 hashfile.hc22000\n"
+	"hcxwltool -i wordlist --straight | sort | uniq | hashcat -m 22000 hashfile.hc22000\n"
+	"hcxwltool -i wordlist --digit --length=10 | sort | uniq | hashcat -m 22000 hashfile.hc22000\n"
 	"hcxwltool -i wordlist --digit | sort | uniq | hashcat -m 22000 hashfile.hc22000\n"
 	"hcxwltool -i wordlist --xdigit | sort | uniq | john --stdin --format=wpapsk-opencl john.hashfile\n"
 	"\n", eigenname, VERSION_TAG, VERSION_YEAR, eigenname);
@@ -733,7 +696,7 @@ while((auswahl = getopt_long (argc, argv, short_options, long_options, &index)) 
 		sweeplen = strtol(optarg, NULL, 10);
 		if((sweeplen < 8) || (sweeplen > 32))
 			{
-			fprintf(stderr, "only 8...32 alowed\n");
+			fprintf(stderr, "only 8...32 allowed\n");
 			exit(EXIT_FAILURE);
 			}
 		break;

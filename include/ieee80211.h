@@ -28,7 +28,7 @@
 #define IEEE80211_STYPE_AUTH		0xb
 #define IEEE80211_STYPE_DEAUTH		0xc
 #define IEEE80211_STYPE_ACTION		0xd
-#define IEEE80211_STYPE_NACK		0xe
+#define IEEE80211_STYPE_NO_ACTION	0xe
 #define IEEE80211_STYPE_MGTRESERVED	0xf
 
 /* control */
@@ -106,47 +106,41 @@
 #define WPA_KEY_INFO_REQUEST WBIT(11)
 #define WPA_KEY_INFO_ENCR_KEY_DATA WBIT(12) /* IEEE 802.11i/RSN only */
 /*===========================================================================*/
-enum ieee80211_radiotap_presence
-{
- IEEE80211_RADIOTAP_TSFT		 = 0x00000001,
- IEEE80211_RADIOTAP_FLAGS		 = 0x00000002,
- IEEE80211_RADIOTAP_RATE		 = 0x00000004,
- IEEE80211_RADIOTAP_CHANNEL		 = 0x00000008,
- IEEE80211_RADIOTAP_FHSS		 = 0x00000010,
- IEEE80211_RADIOTAP_DBM_ANTSIGNAL	 = 0x00000020,
- IEEE80211_RADIOTAP_DBM_ANTNOISE	 = 0x00000040,
- IEEE80211_RADIOTAP_LOCK_QUALITY	 = 0x00000080,
- IEEE80211_RADIOTAP_TX_ATTENUATION	 = 0x00000100,
- IEEE80211_RADIOTAP_DB_TX_ATTENUATION	 = 0x00000200,
- IEEE80211_RADIOTAP_DBM_TX_POWER	 = 0x00000400,
- IEEE80211_RADIOTAP_ANTENNA		 = 0x00000800,
- IEEE80211_RADIOTAP_DB_ANTSIGNAL	 = 0x00001000,
- IEEE80211_RADIOTAP_DB_ANTNOISE		 = 0x00002000,
- IEEE80211_RADIOTAP_RX_FLAGS		 = 0x00004000,
- IEEE80211_RADIOTAP_TX_FLAGS		 = 0x00008000,
- IEEE80211_RADIOTAP_RTS_RETRIES		 = 0x00010000,
- IEEE80211_RADIOTAP_DATA_RETRIES	 = 0x00020000,
- /* 18 is XChannel, not defined */
- IEEE80211_RADIOTAP_MCS			 = 0x00080000,
- IEEE80211_RADIOTAP_AMPDU_STATUS	 = 0x00100000,
- IEEE80211_RADIOTAP_VHT			 = 0x00200000,
- IEEE80211_RADIOTAP_TIMESTAMP		 = 0x00400000,
- /* valid in every it_present bitmap, even vendor namespaces */
- IEEE80211_RADIOTAP_RADIOTAP_NAMESPACE	 = 0x20000000,
- IEEE80211_RADIOTAP_VENDOR_NAMESPACE	 = 0x40000000,
- IEEE80211_RADIOTAP_EXT			 = 0x80000000,
-};
+#define IEEE80211_RADIOTAP_TSFT			0x00000001
+#define IEEE80211_RADIOTAP_FLAGS		0x00000002
+#define IEEE80211_RADIOTAP_RATE			0x00000004
+#define IEEE80211_RADIOTAP_CHANNEL		0x00000008
+#define IEEE80211_RADIOTAP_FHSS			0x00000010
+#define IEEE80211_RADIOTAP_DBM_ANTSIGNAL	0x00000020
+#define IEEE80211_RADIOTAP_DBM_ANTNOISE		0x00000040
+#define IEEE80211_RADIOTAP_LOCK_QUALITY		0x00000080
+#define IEEE80211_RADIOTAP_TX_ATTENUATION	0x00000100
+#define IEEE80211_RADIOTAP_DB_TX_ATTENUATION	0x00000200
+#define IEEE80211_RADIOTAP_DBM_TX_POWER		0x00000400
+#define IEEE80211_RADIOTAP_ANTENNA		0x00000800
+#define IEEE80211_RADIOTAP_DB_ANTSIGNAL		0x00001000
+#define IEEE80211_RADIOTAP_DB_ANTNOISE		0x00002000
+#define IEEE80211_RADIOTAP_RX_FLAGS		0x00004000
+#define IEEE80211_RADIOTAP_TX_FLAGS		0x00008000
+#define IEEE80211_RADIOTAP_RTS_RETRIES		0x00010000
+#define IEEE80211_RADIOTAP_DATA_RETRIES	 	0x00020000
+/* 18 is XChannel, not defined */
+#define IEEE80211_RADIOTAP_MCS			0x00080000
+#define IEEE80211_RADIOTAP_AMPDU_STATUS		0x00100000
+#define IEEE80211_RADIOTAP_VHT			0x00200000
+#define IEEE80211_RADIOTAP_TIMESTAMP		0x00400000
+/* valid in every it_present bitmap, even vendor namespaces */
+#define IEEE80211_RADIOTAP_RADIOTAP_NAMESPACE	0x20000000
+#define IEEE80211_RADIOTAP_VENDOR_NAMESPACE	0x40000000
+#define IEEE80211_RADIOTAP_EXT			0x80000000
 
-enum ieee80211_radiotap_flags
-{
- IEEE80211_RADIOTAP_F_CFP = 0x01,
- IEEE80211_RADIOTAP_F_SHORTPRE = 0x02,
- IEEE80211_RADIOTAP_F_WEP = 0x04,
- IEEE80211_RADIOTAP_F_FRAG = 0x08,
- IEEE80211_RADIOTAP_F_FCS = 0x10,
- IEEE80211_RADIOTAP_F_DATAPAD = 0x20,
- IEEE80211_RADIOTAP_F_BADFCS = 0x40,
-};
+#define IEEE80211_RADIOTAP_F_CFP		0x00000001
+#define IEEE80211_RADIOTAP_F_SHORTPRE		0x00000002
+#define IEEE80211_RADIOTAP_F_WEP		0x00000004
+#define IEEE80211_RADIOTAP_F_FRAG		0x00000008
+#define IEEE80211_RADIOTAP_F_FCS		0x00000010
+#define IEEE80211_RADIOTAP_F_DATAPAD		0x00000020
+#define IEEE80211_RADIOTAP_F_BADFCS		0x00000040
 
 struct radiotap_header
 {
@@ -297,20 +291,7 @@ typedef struct qos_frame qos_t;
  */
 struct mac_frame
 {
-#ifdef BIG_ENDIAN_HOST
- unsigned	subtype : 4;
- unsigned	type : 	2;
- unsigned	version : 2;
-
- unsigned	ordered : 1;
- unsigned	prot : 1;
- unsigned	more_data : 1;
- unsigned	power : 1;
- unsigned	retry : 1;
- unsigned	more_frag : 1;
- unsigned	from_ds : 1;
- unsigned	to_ds : 1;
-#else
+#if __BYTE_ORDER == __LITTLE_ENDIAN
  unsigned	version : 2;
  unsigned	type : 	2;
  unsigned	subtype : 4;
@@ -323,6 +304,19 @@ struct mac_frame
  unsigned	more_data : 1;
  unsigned	prot : 1;
  unsigned	ordered : 1;
+#elif __BYTE_ORDER == __BIG_ENDIAN
+ unsigned	subtype : 4;
+ unsigned	type : 	2;
+ unsigned	version : 2;
+
+ unsigned	ordered : 1;
+ unsigned	prot : 1;
+ unsigned	more_data : 1;
+ unsigned	power : 1;
+ unsigned	retry : 1;
+ unsigned	more_frag : 1;
+ unsigned	from_ds : 1;
+ unsigned	to_ds : 1;
 #endif
  uint16_t	duration;
  uint8_t	addr1[6];
@@ -368,9 +362,14 @@ struct ie_tag
 #define	TAG_CHAN	0x03
 #define	TAG_COUNTRY	0x07
 #define	TAG_RSN		0x30
+#define	TAG_MD		0x36
+#define	TAG_FBSST	0x37
 #define	TAG_PAG		0xde
 #define	TAG_VENDOR	0xdd
 #define	TAG_EXT		0xff
+#define	TAG_SSID_OK	0x01
+#define	TAG_CHAN_OK	0x02
+#define	TAG_COUNTRY_OK	0x04
  uint8_t		len;
  uint8_t		data[1];
 } __attribute__((__packed__));
@@ -421,7 +420,7 @@ struct rsnie_tag
 } __attribute__((__packed__));
 typedef struct rsnie_tag rsnie_t;
 #define	RSNIE_SIZE offsetof(rsnie_t, data)
-#define RSNIE_LEN_MIN	20
+#define RSNIE_LEN_MIN	18
 /*===========================================================================*/
 struct wpaie_tag
 {
@@ -859,7 +858,7 @@ struct udp_frame
 #define UDP_DHCP_CLIENTPORT 68
 #define UDP_DHCP6_SERVERPORT 547
 #define UDP_DHCP6_CLIENTPORT 546
-#define UDP_RADIUS_DESTINATIONPORT 1812
+#define UDP_RADIUS_PORT 1812
 #define UDP_TZSP_DESTINATIONPORT 37008
  uint16_t	len;
  uint16_t	checksum;
@@ -940,6 +939,8 @@ struct tacacsp_frame
 #define TACACSP_VERSION 0xc0
  uint8_t	type;
 #define TACACS_AUTHENTICATION 1
+#define TACACS2_AUTHENTICATION 2
+#define TACACS3_AUTHENTICATION 3
  uint8_t	sequencenr;
  uint8_t	flags;
  uint32_t	sessionid;
@@ -954,16 +955,22 @@ typedef struct tacacsp_frame tacacsp_t;
 #define RADIUS_HEADER_LENGTH 20
 #define RADIUS_MAX_SIZE 1000
 #define RADIUS_MAX_ATTRIBUTE_SIZE 253
+#define RADIUS_ACCESS_REQUEST 1
+#define RADIUS_ACCESS_ACCEPT 2
+#define RADIUS_ACCESS_REJECT 3
+#define RADIUS_ACCESS_CHALLENGE 11
+
 struct radius_frame_t
 {
  uint8_t	code;
  uint8_t	id;
- uint16_t	length;
+ uint16_t	len;
  uint8_t	authenticator[RADIUS_AUTHENTICATOR_LENGTH];
  uint8_t	attrs[RADIUS_MAX_SIZE -RADIUS_HEADER_LENGTH];
  uint8_t	data[1];
 } __attribute__ ((packed));
 typedef struct radius_frame_t radius_t;
+#define	RADIUS_MIN_SIZE 4
 #define	RADIUS_SIZE offsetof(radius_t, data)
 /*===========================================================================*/
 /* global var */

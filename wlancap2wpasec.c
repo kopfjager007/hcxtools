@@ -1,18 +1,12 @@
 #define _GNU_SOURCE
-#include <stdarg.h>
-#include <stdint.h>
+#include <libgen.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdbool.h>
-#include <unistd.h>
 #include <sys/stat.h>
+#include <unistd.h>
 
-#if defined (__APPLE__) || defined(__OpenBSD__)
-#include <libgen.h>
-#else
-#include <stdio_ext.h>
-#endif
 #include <curl/curl.h>
 
 /*===========================================================================*/
@@ -28,12 +22,12 @@ static long int uploadcountok;
 static long int uploadcountfailed;
 static const char *wpasecurl = "https://wpa-sec.stanev.org";
 static bool removeflag = false;
-struct memory *curlmem;
+static struct memory *curlmem;
 /*===========================================================================*/
 static int testwpasec(long int timeout)
 {
 CURL *curl;
-CURLcode res = 0;
+CURLcode res = CURLE_OK;
 
 fprintf(stdout, "connecting to %s\n", wpasecurl);
 curl_global_init(CURL_GLOBAL_ALL);
@@ -56,9 +50,9 @@ static size_t cb(void *data, size_t size, size_t nmemb, void *userp)
 {
 char *ptr;
 size_t realsize = size *nmemb;
-curlmem = (struct memory *)userp;
+curlmem = (struct memory*)userp;
  
-ptr = realloc(curlmem->response, curlmem->size +realsize +1);
+ptr = (char*)realloc(curlmem->response, curlmem->size +realsize +1);
 if(ptr == NULL) return 0;
 curlmem->response = ptr;
 memcpy(&(curlmem->response[curlmem->size]), data, realsize);
@@ -71,11 +65,11 @@ static bool sendcap2wpasec(char *sendcapname, long int timeout, char *keyheader,
 {
 CURL *curl;
 CURLcode res;
+curl_mime *mime;
+curl_mimepart *part;
 bool uploadflag = true;
 int ret;
 
-struct curl_httppost *formpost=NULL;
-struct curl_httppost *lastptr=NULL;
 struct curl_slist *headerlist=NULL;
 static const char buf[] = "Expect:";
 struct memory chunk;
@@ -83,10 +77,21 @@ struct memory chunk;
 fprintf(stdout, "uploading %s to %s\n", sendcapname, wpasecurl);
 memset(&chunk, 0, sizeof(chunk));
 curl_global_init(CURL_GLOBAL_ALL);
-curl_formadd(&formpost, &lastptr, CURLFORM_COPYNAME, "file", CURLFORM_FILE, sendcapname, CURLFORM_END);
-if(emailheader != NULL) curl_formadd(&formpost, &lastptr, CURLFORM_COPYNAME, "email", CURLFORM_PTRCONTENTS, emailheader, CURLFORM_END);
 
 curl = curl_easy_init();
+mime = curl_mime_init(curl);
+part = curl_mime_addpart(mime);
+
+curl_mime_filedata(part, sendcapname);
+curl_mime_type(part, "file");
+curl_mime_name(part, "file");
+
+if(emailheader != NULL)
+	{
+	curl_mime_data(part, emailheader, CURL_ZERO_TERMINATED);
+	curl_mime_name(part, "email");
+	}
+
 headerlist = curl_slist_append(headerlist, buf);
 if(curl)
 	{
@@ -95,21 +100,25 @@ if(curl)
 	curl_easy_setopt(curl, CURLOPT_WRITEDATA, (void *)&chunk);
 	curl_easy_setopt(curl, CURLOPT_URL, wpasecurl);
 	curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT, timeout);
-	curl_easy_setopt(curl, CURLOPT_HTTPPOST, formpost);
+	curl_easy_setopt(curl, CURLOPT_MIMEPOST, mime);
 	if(keyheader) curl_easy_setopt(curl, CURLOPT_COOKIE, keyheader);
 	res = curl_easy_perform(curl);
 	if(res == CURLE_OK)
 		{
-		fprintf(stdout, "upload done\n");
-		if(removeflag == true)
-			{
-			ret = remove(sendcapname);
-			if(ret != 0) fprintf(stdout, "couldn't remove %s\n", sendcapname);
-			}
 		if(curlmem->response != NULL)
 			{
 			fprintf(stdout, "\n%s\n\n", curlmem->response);
+			if(removeflag == true)
+				{
+				ret = remove(sendcapname);
+				if(ret != 0) fprintf(stdout, "couldn't remove %s\n", sendcapname);
+				}
 			free(curlmem->response);
+			}
+		else
+			{
+			fprintf(stdout, "upload not confirmed by server\n");
+			uploadflag = false;
 			}
 		}
 	else
@@ -118,7 +127,7 @@ if(curl)
 		uploadflag = false;
 		}
 	curl_easy_cleanup(curl);
-	curl_formfree(formpost);
+	curl_mime_free(mime);
 	curl_slist_free_all(headerlist);
 	}
 return uploadflag;
